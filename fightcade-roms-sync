@@ -1,0 +1,295 @@
+#!/bin/bash
+# Idempotent ROM scaffold and symlink sync for Flatpak Fightcade on Batocera.
+#
+# Safe to re-run at any time:
+#   - Creates missing scaffold dirs
+#   - Creates or refreshes managed symlinks (dir and per-zip)
+#   - Prunes dangling managed arcade symlinks for zips removed from roms/fbneo
+#   - Never deletes real user files or unmanaged entries under ROMs/
+#
+# Usage: fightcade-roms-sync [--quiet]
+
+set -eu
+
+QUIET=0
+for arg in "$@"; do
+    case "$arg" in
+        --quiet|-q) QUIET=1 ;;
+    esac
+done
+
+info()   { [ "$QUIET" -eq 0 ] && printf '%s\n'       "$*" || true; }
+ok()     { [ "$QUIET" -eq 0 ] && printf '[ OK ] %s\n' "$*" || true; }
+notice() { [ "$QUIET" -eq 0 ] && printf '[INFO] %s\n' "$*" || true; }
+warn()   { printf '[WARN] %s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+APP_ID="com.fightcade.Fightcade"
+FLATPAK_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+ROMS_ROOT="${FLATPAK_DATA}/ROMs"
+HOST_ROMS="/userdata/roms"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Ensure a real directory exists (skip if it is already a symlink).
+ensure_dir() {
+    local path="$1"
+    if [ -L "$path" ]; then
+        return 0
+    fi
+    if [ ! -d "$path" ]; then
+        mkdir -p "$path"
+        notice "mkdir $path"
+    fi
+}
+
+# Create or refresh a managed directory symlink.
+# Skips if the target does not exist on the host.
+# If an existing real directory occupies the path, warn and skip.
+link_dir() {
+    local link="$1"
+    local target="$2"
+
+    if [ ! -d "$target" ]; then
+        ensure_dir "$link"
+        return 0
+    fi
+
+    if [ -L "$link" ]; then
+        local current
+        current=$(readlink "$link")
+        if [ "$current" = "$target" ]; then
+            return 0
+        fi
+        rm "$link"
+        ln -s "$target" "$link"
+        notice "refreshed dir link: $link -> $target"
+        return 0
+    fi
+
+    if [ -d "$link" ]; then
+        # Only replace the real dir if it is empty (safe).
+        if [ -z "$(ls -A "$link" 2>/dev/null)" ]; then
+            rmdir "$link"
+            ln -s "$target" "$link"
+            notice "replaced empty dir with link: $link -> $target"
+        else
+            warn "skipping $link: real non-empty directory exists; remove manually to enable link"
+        fi
+        return 0
+    fi
+
+    ln -s "$target" "$link"
+    notice "created dir link: $link -> $target"
+}
+
+# ---------------------------------------------------------------------------
+# Scaffold top-level ROMs dirs
+# ---------------------------------------------------------------------------
+
+notice "Syncing Fightcade ROMs scaffold under ${ROMS_ROOT}"
+
+mkdir -p "$ROMS_ROOT"
+
+# ggpofba stays a real directory (Fightcade legacy; Batocera has no direct equivalent).
+ensure_dir "${ROMS_ROOT}/ggpofba"
+
+# fbneo root must be a real directory (arcade ZIPs live flat; console subdirs live inside).
+ensure_dir "${ROMS_ROOT}/fbneo"
+
+# flycast root must be real (per-system subdirs are linked).
+ensure_dir "${ROMS_ROOT}/flycast"
+
+# snes9x: link to Batocera roms/snes if it exists, else real dir.
+link_dir "${ROMS_ROOT}/snes9x" "${HOST_ROMS}/snes"
+
+# ---------------------------------------------------------------------------
+# fbneo: console subdirectory symlinks
+# ---------------------------------------------------------------------------
+
+# Mapping: <fightcade subdir> <batocera system>
+link_dir "${ROMS_ROOT}/fbneo/megadrive"  "${HOST_ROMS}/megadrive"
+link_dir "${ROMS_ROOT}/fbneo/nes"        "${HOST_ROMS}/nes"
+link_dir "${ROMS_ROOT}/fbneo/gamegear"   "${HOST_ROMS}/gamegear"
+link_dir "${ROMS_ROOT}/fbneo/coleco"     "${HOST_ROMS}/colecovision"
+link_dir "${ROMS_ROOT}/fbneo/pce"        "${HOST_ROMS}/pcengine"
+link_dir "${ROMS_ROOT}/fbneo/sg1000"     "${HOST_ROMS}/sg1000"
+link_dir "${ROMS_ROOT}/fbneo/msx"        "${HOST_ROMS}/msx1"
+
+# Subdirs Batocera names differently or where a Fightcade-format set may not exist.
+# These are left as empty real dirs (link_dir handles the "no host dir" case).
+link_dir "${ROMS_ROOT}/fbneo/nes_fds"   "${HOST_ROMS}/fds"
+link_dir "${ROMS_ROOT}/fbneo/sms"       "${HOST_ROMS}/mastersystem"
+link_dir "${ROMS_ROOT}/fbneo/spectrum"  "${HOST_ROMS}/zxspectrum"
+link_dir "${ROMS_ROOT}/fbneo/sgx"       "${HOST_ROMS}/supergrafx"
+# Batocera has no tg16 folder: the TurboGrafx-16 is the North American PC
+# Engine and Batocera keeps both in roms/pcengine. FBNeo splits them into
+# separate pce (JP) and tg16 (US) databases, so both subdirs link to the
+# same Batocera folder; FBNeo ignores files that don't match each database.
+link_dir "${ROMS_ROOT}/fbneo/tg16"      "${HOST_ROMS}/pcengine"
+
+# ---------------------------------------------------------------------------
+# flycast: per-system symlinks
+# ---------------------------------------------------------------------------
+
+link_dir "${ROMS_ROOT}/flycast/atomiswave" "${HOST_ROMS}/atomiswave"
+link_dir "${ROMS_ROOT}/flycast/naomi"      "${HOST_ROMS}/naomi"
+link_dir "${ROMS_ROOT}/flycast/naomi2"     "${HOST_ROMS}/naomi2"
+link_dir "${ROMS_ROOT}/flycast/dreamcast"  "${HOST_ROMS}/dreamcast"
+
+# ---------------------------------------------------------------------------
+# fbneo arcade: per-zip symlinks
+# ---------------------------------------------------------------------------
+# The arcade root /userdata/roms/fbneo is a flat directory of .zip files.
+# Fightcade needs them inside ROMs/fbneo/ alongside the console subdirs,
+# so we create one symlink per .zip.
+#
+# "Managed" arcade links are defined as symlinks whose readlink value
+# starts with ${HOST_ROMS}/fbneo/ — we never touch anything else.
+
+ARCADE_SRC="${HOST_ROMS}/fbneo"
+ARCADE_DST="${ROMS_ROOT}/fbneo"
+
+added=0
+pruned=0
+
+if [ -d "$ARCADE_SRC" ]; then
+    # Create or refresh links for every current zip in the source.
+    for src_zip in "${ARCADE_SRC}"/*.zip; do
+        [ -e "$src_zip" ] || continue
+        name=$(basename "$src_zip")
+        dst_link="${ARCADE_DST}/${name}"
+
+        if [ -L "$dst_link" ]; then
+            current=$(readlink "$dst_link")
+            if [ "$current" != "$src_zip" ]; then
+                rm "$dst_link"
+                ln -s "$src_zip" "$dst_link"
+                added=$((added + 1))
+            fi
+        elif [ -e "$dst_link" ]; then
+            warn "arcade: $dst_link exists and is not a symlink; skipping"
+        else
+            ln -s "$src_zip" "$dst_link"
+            added=$((added + 1))
+        fi
+    done
+
+    # Prune dangling managed links (zip removed from source).
+    for dst_link in "${ARCADE_DST}"/*.zip; do
+        [ -L "$dst_link" ] || continue
+        target=$(readlink "$dst_link")
+        # Only prune links we manage (pointing into HOST_ROMS/fbneo/).
+        case "$target" in
+            "${ARCADE_SRC}/"*)
+                if [ ! -e "$target" ]; then
+                    rm "$dst_link"
+                    pruned=$((pruned + 1))
+                    notice "pruned stale arcade link: $(basename "$dst_link")"
+                fi
+                ;;
+        esac
+    done
+fi
+
+[ "$added"  -gt 0 ] && ok "arcade zips linked/refreshed: ${added}"
+[ "$pruned" -gt 0 ] && ok "stale arcade links pruned: ${pruned}"
+
+# ---------------------------------------------------------------------------
+# _fightcade.txt requirement notes
+# ---------------------------------------------------------------------------
+# Every Batocera roms/<system> folder ships a _info.txt describing accepted
+# ROM formats. For each host folder Fightcade links into, drop a companion
+# _fightcade.txt describing what Fightcade itself accepts, in the same style.
+# Only written when the host folder exists, and only rewritten when the
+# content changed (keeps hook-triggered runs cheap).
+
+FC_REPO_URL="https://github.com/net-terminal-gene/batocera-fightcade-flatpak"
+
+write_fc_info() {
+    local dir="$1"
+    local title="$2"
+    local ext="$3"
+    local body="$4"
+
+    [ -d "$dir" ] || return 0
+
+    local file="${dir}/_fightcade.txt"
+    local content
+    content="## FIGHTCADE - ${title} ##
+-------------------------------------------------------------------------------
+This folder is linked into Flatpak Fightcade by batocera-fightcade-flatpak.
+Batocera's own emulators are not affected and keep using this folder as usual.
+
+ROM files extensions accepted by Fightcade: \"${ext}\"
+
+${body}
+
+For more info: ${FC_REPO_URL}
+-------------------------------------------------------------------------------"
+
+    if [ ! -f "$file" ] || [ "$(cat "$file")" != "$content" ]; then
+        printf '%s\n' "$content" > "$file"
+        notice "wrote ${file}"
+    fi
+}
+
+FBNEO_CONSOLE_BODY="ROMs must be Fightcade/FBNeo-format .zip sets named by FBNeo shortname
+(e.g. sonic2.zip). Fightcade validates files against its own ROM database.
+Normal Batocera long-title dumps or .7z archives will not work in Fightcade."
+
+FLYCAST_BODY="ROMs must be MAME/FBNeo-style .zip sets matching Fightcade's ROM database."
+
+write_fc_info "${HOST_ROMS}/fbneo" "FINAL BURN NEO (ARCADE)" ".zip" \
+"ROMs must come from the FBNeo romset used by Fightcade, with filenames
+matching FBNeo's database exactly (e.g. mslug3.zip). Fightcade validates
+files against its own ROM database; sets from other FBNeo versions may fail.
+.7z archives will not work in Fightcade."
+
+write_fc_info "${HOST_ROMS}/megadrive"    "MEGADRIVE (via FBNeo)"     ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/nes"          "NES (via FBNeo)"           ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/gamegear"     "GAME GEAR (via FBNeo)"     ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/colecovision" "COLECOVISION (via FBNeo)"  ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/pcengine" "PC ENGINE / TURBOGRAFX-16 (via FBNeo)" ".zip" \
+"$FBNEO_CONSOLE_BODY
+
+This folder serves both Fightcade PC Engine (Japanese) and TurboGrafx-16
+(North American) sets; each file is matched to the right FBNeo database
+automatically."
+write_fc_info "${HOST_ROMS}/sg1000"       "SG-1000 (via FBNeo)"       ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/msx1"         "MSX (via FBNeo)"           ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/fds"          "FAMICOM DISK SYSTEM (via FBNeo)" ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/mastersystem" "MASTER SYSTEM (via FBNeo)" ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/zxspectrum"   "ZX SPECTRUM (via FBNeo)"   ".zip" "$FBNEO_CONSOLE_BODY"
+write_fc_info "${HOST_ROMS}/supergrafx"   "SUPERGRAFX (via FBNeo)"    ".zip" "$FBNEO_CONSOLE_BODY"
+
+write_fc_info "${HOST_ROMS}/snes" "SUPER NINTENDO (via Snes9x)" ".zip .smc .sfc" \
+"ROMs must match the sets expected by Fightcade's Snes9x and its ROM database.
+Fightcade shortname .zip sets are the safe choice; long-title dumps or .7z
+archives will not work in Fightcade."
+
+write_fc_info "${HOST_ROMS}/naomi" "NAOMI (via Flycast)" ".zip" "$FLYCAST_BODY
+
+BIOS: naomi.zip must be in this folder alongside the games."
+
+write_fc_info "${HOST_ROMS}/naomi2" "NAOMI 2 (via Flycast)" ".zip" "$FLYCAST_BODY
+
+BIOS: naomi.zip and naomi2.zip must be in this folder alongside the games."
+
+write_fc_info "${HOST_ROMS}/atomiswave" "ATOMISWAVE (via Flycast)" ".zip" "$FLYCAST_BODY
+
+BIOS: awbios.zip must be in this folder alongside the games."
+
+write_fc_info "${HOST_ROMS}/dreamcast" "DREAMCAST (via Flycast)" ".chd" \
+"CHD files must match Fightcade's ROM database hashes exactly; standard
+Batocera CHD rips will fail Fightcade's hash check.
+
+BIOS: dc_boot.bin and dc_flash.bin must be copied manually to:
+/userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data/"
+
+ok "fightcade-roms-sync complete"

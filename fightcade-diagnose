@@ -1,0 +1,278 @@
+#!/bin/bash
+# Diagnostic report for the Fightcade Flatpak ROMs installer.
+# Prints install state, symlink health, and Flatpak override contents.
+# Read-only: nothing is modified.
+
+set -eu
+
+APP_ID="com.fightcade.Fightcade"
+PROJECT_DIR="/userdata/system/fightcade-flatpak"
+SCRIPTS_DIR="/userdata/system/scripts"
+FLATPAK_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+ROMS_ROOT="${FLATPAK_DATA}/ROMs"
+HOST_ROMS="/userdata/roms"
+
+pass()  { printf '[PASS] %s\n' "$*"; }
+fail()  { printf '[FAIL] %s\n' "$*"; }
+info()  { printf '       %s\n' "$*"; }
+head_section() { printf '\n--- %s ---\n' "$*"; }
+
+any_fail=0
+
+check() {
+    local label="$1"
+    local result="$2"
+    if [ "$result" = "ok" ]; then
+        pass "$label"
+    else
+        fail "$label — $result"
+        any_fail=1
+    fi
+}
+
+printf '%s\n' '============================================================'
+printf '%s\n' ' Fightcade Flatpak ROMs — Diagnostic Report'
+printf '%s\n' '============================================================'
+
+# ---------------------------------------------------------------------------
+head_section "Flatpak"
+# ---------------------------------------------------------------------------
+
+if flatpak info --system "${APP_ID}" >/dev/null 2>&1; then
+    ver=$(flatpak info --system "${APP_ID}" 2>/dev/null | awk '/Version/{print $2}')
+    pass "Fightcade Flatpak installed system-wide (${ver:-unknown version})"
+else
+    fail "Fightcade Flatpak NOT installed system-wide"
+    any_fail=1
+fi
+
+# ---------------------------------------------------------------------------
+head_section "Installed scripts"
+# ---------------------------------------------------------------------------
+
+for f in fightcade-roms-sync fightcade-game-hook fightcade-crt-watch fightcade-diagnose uninstall.sh install.sh; do
+    path="${PROJECT_DIR}/${f}"
+    if [ -x "$path" ]; then
+        pass "${path}"
+    elif [ -f "$path" ]; then
+        fail "${path} (not executable)"
+        any_fail=1
+    else
+        fail "${path} (missing)"
+        any_fail=1
+    fi
+done
+
+hook="${SCRIPTS_DIR}/fightcade-game-hook"
+if [ -x "$hook" ]; then
+    pass "game hook: ${hook}"
+else
+    fail "game hook missing or not executable: ${hook}"
+    any_fail=1
+fi
+
+# ---------------------------------------------------------------------------
+head_section "ROMs scaffold"
+# ---------------------------------------------------------------------------
+
+for d in fbneo flycast ggpofba; do
+    p="${ROMS_ROOT}/${d}"
+    if [ -d "$p" ] && [ ! -L "$p" ]; then
+        pass "real dir: ROMs/${d}"
+    elif [ -d "$p" ]; then
+        info "ROMs/${d} is a symlink (expected real dir)"
+        fail "ROMs/${d} should be a real directory"
+        any_fail=1
+    else
+        fail "missing: ROMs/${d}"
+        any_fail=1
+    fi
+done
+
+# ---------------------------------------------------------------------------
+head_section "Dir symlinks"
+# ---------------------------------------------------------------------------
+
+check_link() {
+    local label="$1"
+    local link="$2"
+    local expected_target="$3"
+
+    if [ -L "$link" ]; then
+        actual=$(readlink "$link")
+        if [ "$actual" = "$expected_target" ]; then
+            if [ -d "$link" ]; then
+                pass "$label -> ${expected_target}"
+            else
+                fail "$label -> ${expected_target} (target missing on host)"
+                any_fail=1
+            fi
+        else
+            fail "$label -> ${actual} (expected ${expected_target})"
+            any_fail=1
+        fi
+    elif [ -d "$link" ]; then
+        info "$label: real dir exists (host path absent or not yet linked)"
+    else
+        fail "$label: missing"
+        any_fail=1
+    fi
+}
+
+check_link "snes9x"            "${ROMS_ROOT}/snes9x"              "${HOST_ROMS}/snes"
+check_link "fbneo/megadrive"   "${ROMS_ROOT}/fbneo/megadrive"     "${HOST_ROMS}/megadrive"
+check_link "fbneo/nes"         "${ROMS_ROOT}/fbneo/nes"           "${HOST_ROMS}/nes"
+check_link "fbneo/gamegear"    "${ROMS_ROOT}/fbneo/gamegear"      "${HOST_ROMS}/gamegear"
+check_link "fbneo/coleco"      "${ROMS_ROOT}/fbneo/coleco"        "${HOST_ROMS}/colecovision"
+check_link "fbneo/pce"         "${ROMS_ROOT}/fbneo/pce"           "${HOST_ROMS}/pcengine"
+check_link "fbneo/sg1000"      "${ROMS_ROOT}/fbneo/sg1000"        "${HOST_ROMS}/sg1000"
+check_link "fbneo/msx"         "${ROMS_ROOT}/fbneo/msx"           "${HOST_ROMS}/msx1"
+check_link "flycast/atomiswave" "${ROMS_ROOT}/flycast/atomiswave" "${HOST_ROMS}/atomiswave"
+check_link "flycast/naomi"     "${ROMS_ROOT}/flycast/naomi"       "${HOST_ROMS}/naomi"
+check_link "flycast/naomi2"    "${ROMS_ROOT}/flycast/naomi2"      "${HOST_ROMS}/naomi2"
+check_link "flycast/dreamcast" "${ROMS_ROOT}/flycast/dreamcast"   "${HOST_ROMS}/dreamcast"
+
+# ---------------------------------------------------------------------------
+head_section "fbneo arcade per-zip links"
+# ---------------------------------------------------------------------------
+
+if [ -d "${HOST_ROMS}/fbneo" ]; then
+    src_count=$(find "${HOST_ROMS}/fbneo" -maxdepth 1 -name '*.zip' 2>/dev/null | wc -l | tr -d ' ')
+    dst_count=$(find "${ROMS_ROOT}/fbneo" -maxdepth 1 -name '*.zip' -type l 2>/dev/null | wc -l | tr -d ' ')
+    dangling=$(find "${ROMS_ROOT}/fbneo" -maxdepth 1 -name '*.zip' -type l 2>/dev/null \
+        | while read -r l; do [ -e "$l" ] || printf '%s\n' "$l"; done | wc -l | tr -d ' ')
+
+    pass "source zips in ${HOST_ROMS}/fbneo: ${src_count}"
+    pass "managed arcade links in ROMs/fbneo: ${dst_count}"
+    if [ "$dangling" -gt 0 ]; then
+        fail "dangling arcade links: ${dangling} (run fightcade-roms-sync to prune)"
+        any_fail=1
+    else
+        pass "no dangling arcade links"
+    fi
+else
+    info "${HOST_ROMS}/fbneo does not exist; arcade links not applicable"
+fi
+
+# ---------------------------------------------------------------------------
+head_section "Flatpak overrides"
+# ---------------------------------------------------------------------------
+
+if flatpak override --system --show "${APP_ID}" >/dev/null 2>&1; then
+    overrides=$(flatpak override --system --show "${APP_ID}" 2>/dev/null | grep -i filesystem || true)
+    if [ -n "$overrides" ]; then
+        pass "Filesystem overrides:"
+        printf '%s\n' "$overrides" | while IFS= read -r line; do
+            info "$line"
+        done
+    else
+        fail "No filesystem overrides found for ${APP_ID}"
+        any_fail=1
+    fi
+else
+    fail "Could not read overrides for ${APP_ID}"
+    any_fail=1
+fi
+
+# ---------------------------------------------------------------------------
+head_section "Artwork / gamelist"
+# ---------------------------------------------------------------------------
+
+FLATPAK_ROMS_DIR="/userdata/roms/flatpak"
+
+if [ -f "${FLATPAK_ROMS_DIR}/images/Fightcade-image.png" ]; then
+    pass "artwork: images/Fightcade-image.png"
+else
+    fail "artwork missing: ${FLATPAK_ROMS_DIR}/images/Fightcade-image.png"
+    any_fail=1
+fi
+
+if [ -f "${FLATPAK_ROMS_DIR}/images/Fightcade.png" ]; then
+    pass "icon: images/Fightcade.png (from batocera-flatpak-update)"
+else
+    info "icon images/Fightcade.png not found (created by batocera-flatpak-update)"
+fi
+
+if [ -f "${FLATPAK_ROMS_DIR}/gamelist.xml" ]; then
+    if grep -q '<path>\./Fightcade\.flatpak</path>' "${FLATPAK_ROMS_DIR}/gamelist.xml"; then
+        pass "gamelist.xml has Fightcade entry"
+    else
+        fail "gamelist.xml exists but has no Fightcade entry"
+        any_fail=1
+    fi
+else
+    fail "gamelist.xml missing: ${FLATPAK_ROMS_DIR}/gamelist.xml"
+    any_fail=1
+fi
+
+# ---------------------------------------------------------------------------
+head_section "CRT / Switchres"
+# ---------------------------------------------------------------------------
+
+if [ -x /usr/bin/switchres ]; then
+    pass "switchres binary present"
+else
+    info "switchres not present; CRT switching not available on this build"
+fi
+
+dm=$(batocera-resolution getDisplayMode 2>/dev/null || echo "unknown")
+res=$(batocera-resolution currentResolution 2>/dev/null || echo "unknown")
+info "display mode: ${dm}  current resolution: ${res}"
+
+if [ -f /userdata/system/configs/fightcade-switchres.disable ]; then
+    info "kill switch present: Switchres DISABLED for Fightcade"
+elif [ -f /userdata/system/configs/fightcade-switchres.force ]; then
+    info "force file present: Switchres FORCED on for Fightcade"
+else
+    w="${res%%x*}"
+    case "$w" in
+        *[!0-9]*|'') info "cannot determine width; watcher will decide at launch" ;;
+        *)
+            if [ "$dm" = "xorg" ] && [ "$w" -lt 1024 ]; then
+                info "Switchres will engage on game launch (xorg, width < 1024)"
+            else
+                info "Switchres will NOT engage (needs xorg display mode and width < 1024)"
+            fi
+            ;;
+    esac
+fi
+
+if [ -f /tmp/fightcade-crt-watch.pid ] && kill -0 "$(cat /tmp/fightcade-crt-watch.pid 2>/dev/null)" 2>/dev/null; then
+    info "CRT watcher is currently running (pid $(cat /tmp/fightcade-crt-watch.pid))"
+fi
+
+for cfg in "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" \
+           "${FLATPAK_DATA}/config/snes9x/fcadesnes9x.conf" \
+           "${FLATPAK_DATA}/config/flycast/emu.cfg"; do
+    if [ -f "${cfg}.bak.switchres" ]; then
+        fail "leftover Switchres backup: ${cfg}.bak.switchres (run fightcade-crt-watch stop)"
+        any_fail=1
+    fi
+done
+
+# ---------------------------------------------------------------------------
+head_section "Dreamcast BIOS"
+# ---------------------------------------------------------------------------
+
+BIOS_DIR="${FLATPAK_DATA%/data}/config/flycast/data"
+for bios in dc_boot.bin dc_flash.bin; do
+    if [ -f "${BIOS_DIR}/${bios}" ]; then
+        pass "${bios} present in ${BIOS_DIR}"
+    else
+        info "${bios} not found at ${BIOS_DIR}/${bios}"
+        info "(Dreamcast requires BIOS here; Naomi/Atomiswave do not)"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+printf '\n'
+printf '%s\n' '============================================================'
+if [ "$any_fail" -eq 0 ]; then
+    printf '%s\n' ' All checks passed.'
+else
+    printf '%s\n' ' One or more checks failed. Review [FAIL] lines above.'
+fi
+printf '%s\n' '============================================================'
+printf '\n'
+
+exit "$any_fail"
