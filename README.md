@@ -130,6 +130,18 @@ touch /userdata/system/configs/fightcade-switchres.disable
 touch /userdata/system/configs/fightcade-switchres.force
 ```
 
+**In-game menu hotkeys (CRT only, while a game is running):**
+
+Low-resolution games make the FBNeo in-game menu hard to use at native Switchres timing.
+These shortcuts only apply during gameplay, not in the Fightcade UI:
+
+| Key | Action |
+|-----|--------|
+| **ESC** | Pause Switchres and restore the Batocera menu resolution (e.g. 640x480) so you can use the in-game menu, assign controls, or turn off scanlines |
+| **Alt+Enter** | Resume Switchres and return to the game's native modeline |
+
+When you exit the game normally (Game → Exit Game), Switchres still restores automatically.
+
 ## Commands
 
 All scripts live in `/userdata/system/fightcade-flatpak/`.

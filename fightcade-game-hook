@@ -52,6 +52,9 @@ fi
 # Start the CRT watcher in the background; it exits immediately unless the
 # display is an xorg CRT setup (or the force file is present).
 if [ -x "$CRT_WATCH" ]; then
+    # Stop any prior watcher (orphan daemons from repeated gameStart) before starting one.
+    "$CRT_WATCH" stop >/dev/null 2>&1 || true
+    sleep 0.15
     # setsid detaches the daemon from the launcher's process group so it
     # survives the hook returning and is only stopped by the gameStop event.
     setsid "$CRT_WATCH" daemon >/dev/null 2>&1 </dev/null &

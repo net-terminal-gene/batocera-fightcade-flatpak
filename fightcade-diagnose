@@ -209,6 +209,14 @@ fi
 head_section "CRT / Switchres"
 # ---------------------------------------------------------------------------
 
+if command -v wmctrl >/dev/null 2>&1; then
+    pass "wmctrl present (window-exit detection enabled)"
+elif command -v xdotool >/dev/null 2>&1; then
+    pass "xdotool present (window-exit detection enabled)"
+else
+    info "wmctrl/xdotool not installed; CRT watcher relies on process detection only"
+fi
+
 if [ -x /usr/bin/switchres ]; then
     pass "switchres binary present"
 else

@@ -87,6 +87,31 @@ is_local_source() {
     [ -f "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/fightcade-roms-sync" ]
 }
 
+# curl | bash feeds the script on stdin. While flatpak install runs for several
+# minutes, that pipe + Flatpak's progress-bar terminal control sequences can
+# leave bash with a truncated script (everything after flatpak never runs).
+# Bootstrap: download this script to a temp file and re-exec from disk.
+bootstrap_off_pipe_if_needed() {
+    [ -n "${FIGHTCADE_INSTALL_BOOTSTRAPPED:-}" ] && return 0
+    is_local_source && return 0
+
+    command -v curl >/dev/null 2>&1 || fail "curl is required for direct GitHub installation."
+
+    local bootstrap
+    bootstrap=$(mktemp /tmp/fightcade-flatpak-install.XXXXXX.sh)
+    curl -fsSL --retry 3 --connect-timeout 15 \
+        "${RAW_BASE}/install.sh" -o "${bootstrap}" \
+        || fail "Could not download install.sh from ${RAW_BASE}."
+    chmod +x "${bootstrap}"
+    export FIGHTCADE_INSTALL_BOOTSTRAPPED=1
+
+    # "$@" is empty here (args were already parsed above); rebuild flags.
+    local reexec_args=()
+    [ "${AUTO_YES}" -eq 1 ] && reexec_args+=(-y)
+    [ "${INSTALL_FIGHTCADE}" -eq 1 ] && reexec_args+=(--install-fightcade)
+    exec bash "${bootstrap}" "${reexec_args[@]}"
+}
+
 fetch_files() {
     local destination="$1"
     local file source_dir
@@ -129,17 +154,23 @@ ensure_system_flathub() {
 }
 
 install_fightcade_flatpak() {
-    notice "Installing Fightcade Flatpak system-wide..."
+    notice "Installing Fightcade Flatpak system-wide (several minutes, ~1.5 GB download)..."
     ensure_system_flathub
 
-    if flatpak install --system -y flathub "${APP_ID}"; then
+    mkdir -p "${LOG_DIR}"
+    local log="${LOG_DIR}/fightcade-flatpak-install.log"
+    notice "Flatpak output logged to ${log}"
+
+    # Plain progress avoids the animated bar that corrupts SSH sessions.
+    export FLATPAK_PROGRESS=plain
+    if flatpak install --system -y flathub "${APP_ID}" >>"${log}" 2>&1; then
         if flatpak info --system "${APP_ID}" >/dev/null 2>&1; then
             ok "Fightcade Flatpak installed system-wide"
         else
-            fail "Flatpak reported success but the system-wide Fightcade installation could not be verified."
+            fail "Flatpak reported success but the system-wide Fightcade installation could not be verified. See ${log}"
         fi
     else
-        fail "Fightcade could not be installed. Install it via Batocera's Flatpak Manager and run this installer again."
+        fail "Fightcade could not be installed. See ${log} or install via Batocera's Flatpak Manager and run this installer again."
     fi
 }
 
@@ -238,6 +269,8 @@ install_artwork() {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+bootstrap_off_pipe_if_needed "$@"
 
 printf '%s\n' '------------------------------------------------------------'
 printf '%s\n' ' Fightcade Flatpak ROMs Installer for Batocera'
