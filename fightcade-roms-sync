@@ -145,9 +145,13 @@ link_dir "${ROMS_ROOT}/flycast/dreamcast"  "${HOST_ROMS}/dreamcast"
 # ---------------------------------------------------------------------------
 # fbneo arcade: per-zip symlinks
 # ---------------------------------------------------------------------------
-# The arcade root /userdata/roms/fbneo is a flat directory of .zip files.
-# Fightcade needs them inside ROMs/fbneo/ alongside the console subdirs,
-# so we create one symlink per .zip.
+# Batocera keeps arcade ROMs flat in /userdata/roms/fbneo/*.zip. Fightcade expects
+# them under ROMs/fbneo/ next to console subdirs (megadrive/, nes/, ...), so we
+# cannot replace ROMs/fbneo with one directory symlink to roms/fbneo.
+#
+# Each arcade zip needs its own symlink in the Flatpak ROMs tree. Dir-linked
+# console systems pick up new files automatically; arcade does not. Re-run this
+# block after adding or removing zips (fightcade-game-hook calls sync on launch).
 #
 # "Managed" arcade links are defined as symlinks whose readlink value
 # starts with ${HOST_ROMS}/fbneo/ — we never touch anything else.

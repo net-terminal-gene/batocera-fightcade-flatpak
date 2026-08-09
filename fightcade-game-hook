@@ -6,9 +6,8 @@
 #
 #   <script> <event> <system> <emulator> <core> <rom>
 #
-# gameStart: fires fightcade-roms-sync so any ROMs added to
-# /userdata/roms/fbneo since the last launch are linked automatically, then
-# starts the Switchres CRT watcher (a no-op on non-CRT / HD setups).
+# gameStart: runs fightcade-roms-sync (needed for FBNeo arcade zips; see below),
+# then starts the Switchres CRT watcher (a no-op on non-CRT / HD setups).
 # gameStop: stops the CRT watcher and restores configs/display if needed.
 # All other events and systems are silently ignored.
 
@@ -43,6 +42,11 @@ fi
 
 # --- gameStart ---
 
+# FBNeo arcade ROMs use per-zip symlinks (ROMs/fbneo/*.zip), not a single dir
+# link, because ROMs/fbneo/ must stay a real directory with console subdirs inside.
+# New zips added to /userdata/roms/fbneo/ after install do not appear in Fightcade
+# until fightcade-roms-sync creates each symlink. Console/flycast dir links do not
+# need this: files added under /userdata/roms/<system>/ are visible immediately.
 if [ -x "$SYNC_SCRIPT" ]; then
     "$SYNC_SCRIPT" --quiet
 else

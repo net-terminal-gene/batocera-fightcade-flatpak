@@ -13,7 +13,8 @@ LOG_DIR="/userdata/system/logs"
 FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-crt-watch fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
-ART_FILE="Fightcade-image.png"
+ART_REPO_PATH="images/Fightcade-image.png"
+ART_NAME="Fightcade-image.png"
 FLATPAK_ROMS_DIR="/userdata/roms/flatpak"
 GAMELIST="${FLATPAK_ROMS_DIR}/gamelist.xml"
 ES_SERVER="http://127.0.0.1:1234"
@@ -114,17 +115,21 @@ bootstrap_off_pipe_if_needed() {
 
 fetch_files() {
     local destination="$1"
-    local file source_dir
+    local file source_dir dest_dir
     mkdir -p "${destination}"
 
     if is_local_source; then
         source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-        for file in ${FILES} ${ART_FILE}; do
+        for file in ${FILES} ${ART_REPO_PATH}; do
+            dest_dir=$(dirname "${destination}/${file}")
+            [ "${dest_dir}" != "${destination}" ] && mkdir -p "${dest_dir}"
             cp "${source_dir}/${file}" "${destination}/${file}"
         done
     else
         command -v curl >/dev/null 2>&1 || fail "curl is required for direct GitHub installation."
-        for file in ${FILES} ${ART_FILE}; do
+        for file in ${FILES} ${ART_REPO_PATH}; do
+            dest_dir=$(dirname "${destination}/${file}")
+            [ "${dest_dir}" != "${destination}" ] && mkdir -p "${dest_dir}"
             curl -fsSL --retry 3 --connect-timeout 15 \
                 "${RAW_BASE}/${file}" -o "${destination}/${file}" \
                 || fail "Could not download ${file} from ${RAW_BASE}."
@@ -231,8 +236,8 @@ install_artwork() {
     notice "Installing Fightcade artwork..."
 
     mkdir -p "${FLATPAK_ROMS_DIR}/images"
-    install -m 0644 "${TMP_DIR}/${ART_FILE}" "${FLATPAK_ROMS_DIR}/images/${ART_FILE}"
-    ok "Artwork installed: ${FLATPAK_ROMS_DIR}/images/${ART_FILE}"
+    install -m 0644 "${TMP_DIR}/${ART_REPO_PATH}" "${FLATPAK_ROMS_DIR}/images/${ART_NAME}"
+    ok "Artwork installed: ${FLATPAK_ROMS_DIR}/images/${ART_NAME}"
 
     if [ ! -f "${GAMELIST}" ]; then
         {
