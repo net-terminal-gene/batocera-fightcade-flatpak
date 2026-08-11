@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+# Grab gamepad pseudo-keyboard interfaces during wine-emu CRT Switchres play.
+# EasySMX exposes Consumer/System Control kbd nodes that synthesize Alt+Enter.
+# The main event-joystick node is read by fightcade-pad-mouse (no grab).
+#
+# Usage: fightcade-crt-block-pad-kbd start | stop
+
+from __future__ import annotations
+
+import fcntl
+import os
+import re
+import select
+import signal
+import struct
+import sys
+import time
+
+FBNEO_FLAG = "/tmp/fightcade-fbneo-crt-active"
+PIDFILE = "/tmp/fightcade-crt-block-pad-kbd.pid"
+EVIOCGRAB = 0x40044590
+EVENT_SIZE = struct.calcsize("QQHHi")
+
+PAD_KBD_RE = re.compile(
+    r"(gamepad|controller|joystick|Gamepad|Joystick|EasySMX|Sony|DualSense|"
+    r"PlayStation|Xbox|8BitDo|Consumer Control|System Control)",
+    re.I,
+)
+SKIP_NAME_RE = re.compile(r"(motion|touchpad|headset|mouse|jack)", re.I)
+
+
+def log(msg: str) -> None:
+    sys.stderr.write(f"fightcade-crt-block-pad-kbd: {msg}\n")
+
+
+def gamepad_kbd_nodes() -> list[str]:
+    nodes: list[str] = []
+    name = ""
+    try:
+        with open("/proc/bus/input/devices", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("N: Name="):
+                    name = line.split("=", 1)[1].strip().strip('"')
+                elif line.startswith("H: Handlers="):
+                    if "kbd" not in line:
+                        continue
+                    if SKIP_NAME_RE.search(name):
+                        continue
+                    if not PAD_KBD_RE.search(name):
+                        continue
+                    m = re.search(r"event\d+", line)
+                    if m:
+                        nodes.append(f"/dev/input/{m.group(0)}")
+    except OSError as exc:
+        log(f"device scan failed: {exc}")
+    return nodes
+
+
+def stop_existing() -> None:
+    if not os.path.isfile(PIDFILE):
+        return
+    try:
+        with open(PIDFILE, encoding="utf-8") as fh:
+            pid = int(fh.read().strip())
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(20):
+            time.sleep(0.05)
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except (OSError, ValueError):
+        pass
+    try:
+        os.remove(PIDFILE)
+    except OSError:
+        pass
+
+
+def run_loop(nodes: list[str]) -> None:
+    fds: list[int] = []
+    try:
+        for path in nodes:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            fcntl.ioctl(fd, EVIOCGRAB, 1)
+            fds.append(fd)
+        log(f"grabbing {len(fds)} pad kbd node(s): {', '.join(nodes)}")
+        while os.path.isfile(FBNEO_FLAG):
+            if fds:
+                select.select(fds, [], [], 1.0)
+                for fd in fds:
+                    try:
+                        while True:
+                            os.read(fd, EVENT_SIZE)
+                    except BlockingIOError:
+                        pass
+            else:
+                time.sleep(1.0)
+    finally:
+        for fd in fds:
+            try:
+                fcntl.ioctl(fd, EVIOCGRAB, 0)
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def cmd_start() -> int:
+    stop_existing()
+    nodes = gamepad_kbd_nodes()
+    if not nodes:
+        log("no pad kbd nodes to grab")
+        return 0
+    pid = os.fork()
+    if pid > 0:
+        time.sleep(0.05)
+        return 0
+    os.setsid()
+    pid2 = os.fork()
+    if pid2 > 0:
+        os._exit(0)
+    with open(PIDFILE, "w", encoding="utf-8") as fh:
+        fh.write(str(os.getpid()))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+    try:
+        run_loop(nodes)
+    finally:
+        try:
+            os.remove(PIDFILE)
+        except OSError:
+            pass
+    return 0
+
+
+def main() -> int:
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "start":
+        return cmd_start()
+    if cmd == "stop":
+        stop_existing()
+        return 0
+    log("Usage: fightcade-crt-block-pad-kbd start|stop")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

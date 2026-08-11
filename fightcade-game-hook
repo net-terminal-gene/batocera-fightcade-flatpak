@@ -1,15 +1,9 @@
 #!/bin/bash
 # Batocera gameStart/gameStop hook for Flatpak Fightcade.
 #
-# Installed to /userdata/system/scripts/fightcade-game-hook by install.sh.
-# Batocera's emulatorlauncher calls every executable in that directory with:
-#
-#   <script> <event> <system> <emulator> <core> <rom>
-#
-# gameStart: runs fightcade-roms-sync (needed for FBNeo arcade zips; see below),
-# then starts the Switchres CRT watcher (a no-op on non-CRT / HD setups).
-# gameStop: stops the CRT watcher and restores configs/display if needed.
-# All other events and systems are silently ignored.
+# gameStart: ROM sync, pad-to-mouse for Fightcade UI, CRT host watcher (CRT only).
+# gameStop:  stop pad-mouse + CRT host watcher and run CRT recovery.
+# Patched xdg-open writes play.pending; fightcade-crt-hostd runs dispatch on the host.
 
 EVENT="$1"
 SYSTEM="${2:-}"
@@ -18,7 +12,9 @@ ROM="${5:-}"
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
 SYNC_SCRIPT="${PROJECT_DIR}/fightcade-roms-sync"
-CRT_WATCH="${PROJECT_DIR}/fightcade-crt-watch"
+CRT_HOSTD="${PROJECT_DIR}/crt/fightcade-crt-hostd"
+CRT_RECOVER="${PROJECT_DIR}/crt/fightcade-crt-recover"
+PAD_MOUSE="${PROJECT_DIR}/input/fightcade-pad-mouse"
 
 [ "$SYSTEM" = "flatpak" ] || exit 0
 
@@ -27,7 +23,6 @@ case "$EVENT" in
     *) exit 0 ;;
 esac
 
-# Match by rom file contents: the .flatpak file contains the app ID.
 if [ -f "$ROM" ]; then
     rom_id=$(cat "$ROM" 2>/dev/null | tr -d '[:space:]')
     [ "$rom_id" = "$APP_ID" ] || exit 0
@@ -36,30 +31,26 @@ else
 fi
 
 if [ "$EVENT" = "gameStop" ]; then
-    [ -x "$CRT_WATCH" ] && "$CRT_WATCH" stop
+    [ -x "$PAD_MOUSE" ] && "$PAD_MOUSE" stop
+    [ -x "$CRT_HOSTD" ] && "$CRT_HOSTD" stop
+    [ -x "$CRT_RECOVER" ] && "$CRT_RECOVER"
     exit 0
 fi
 
 # --- gameStart ---
 
-# FBNeo arcade ROMs use per-zip symlinks (ROMs/fbneo/*.zip), not a single dir
-# link, because ROMs/fbneo/ must stay a real directory with console subdirs inside.
-# New zips added to /userdata/roms/fbneo/ after install do not appear in Fightcade
-# until fightcade-roms-sync creates each symlink. Console/flycast dir links do not
-# need this: files added under /userdata/roms/<system>/ are visible immediately.
 if [ -x "$SYNC_SCRIPT" ]; then
     "$SYNC_SCRIPT" --quiet
-else
-    printf '[WARN] fightcade-game-hook: sync script not found at %s\n' "$SYNC_SCRIPT" >&2
 fi
 
-# Start the CRT watcher in the background; it exits immediately unless the
-# display is an xorg CRT setup (or the force file is present).
-if [ -x "$CRT_WATCH" ]; then
-    # Stop any prior watcher (orphan daemons from repeated gameStart) before starting one.
-    "$CRT_WATCH" stop >/dev/null 2>&1 || true
-    sleep 0.15
-    # setsid detaches the daemon from the launcher's process group so it
-    # survives the hook returning and is only stopped by the gameStop event.
-    setsid "$CRT_WATCH" daemon >/dev/null 2>&1 </dev/null &
+if [ -x "$PAD_MOUSE" ] && [ ! -f /userdata/system/configs/fightcade-pad-mouse.disable ]; then
+    "$PAD_MOUSE" stop >/dev/null 2>&1 || true
+    sleep 0.1
+    setsid "$PAD_MOUSE" daemon >/dev/null 2>&1 </dev/null &
+fi
+
+if [ -x "$CRT_HOSTD" ]; then
+    FC_DISPLAY=":0.0"
+    [ -S /tmp/.X11-unix/X0 ] || FC_DISPLAY=":0.0"
+    setsid env DISPLAY="$FC_DISPLAY" "$CRT_HOSTD" ensure >/dev/null 2>&1 </dev/null &
 fi

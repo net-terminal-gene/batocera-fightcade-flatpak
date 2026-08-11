@@ -1,0 +1,90 @@
+#!/bin/bash
+# Host-side play watcher for Flatpak Fightcade CRT Switchres.
+# flatpak-spawn --host is unreliable inside the Fightcade sandbox on Batocera,
+# so patched xdg-open writes play.pending and this daemon (started from the
+# gameStart hook on the host) runs fightcade-crt-switchres dispatch.
+
+PROJECT_DIR="/userdata/system/fightcade-flatpak"
+CRT_DIR="${PROJECT_DIR}/crt"
+PENDING="${PROJECT_DIR}/play.pending"
+WRAP="${CRT_DIR}/fightcade-crt-switchres"
+PIDFILE="/tmp/fightcade-crt-hostd.pid"
+LOCKFILE="/tmp/fightcade-crt-hostd.lock"
+LOG_FILE="/userdata/system/logs/fightcade-crt-switchres.log"
+
+run_daemon() {
+    export DISPLAY=:0.0
+    [ -S /tmp/.X11-unix/X0 ] || export DISPLAY=:0.0
+
+    exec 9>"$LOCKFILE"
+    flock -n 9 || exit 0
+
+    if [ -f "$PIDFILE" ]; then
+        local oldpid
+        oldpid=$(cat "$PIDFILE" 2>/dev/null)
+        if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+            exit 0
+        fi
+    fi
+    echo $$ > "$PIDFILE"
+
+    trap 'rm -f "$PIDFILE"' EXIT INT TERM HUP
+    mkdir -p "$(dirname "$LOG_FILE")"
+
+    last_url=""
+    last_at=0
+
+    while true; do
+        if [ -f "$PENDING" ]; then
+            local url now
+            url=$(tr -d '\r' < "$PENDING" | head -1)
+            rm -f "$PENDING"
+            now=$(date +%s)
+            if [ -n "$url" ] && [ "$url" = "$last_url" ] && [ $((now - last_at)) -lt 5 ]; then
+                continue
+            fi
+            if [[ "$url" == fcade://play/* ]] && [ -x "$WRAP" ]; then
+                last_url="$url"
+                last_at=$now
+                printf '%s hostd: dispatch %s\n' "$(date '+%F %T')" "$url" >> "$LOG_FILE"
+                "$WRAP" dispatch "$url"
+            fi
+        fi
+        sleep 0.05
+    done
+}
+
+do_stop() {
+    local pid
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE" 2>/dev/null)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+        for _ in 1 2 3 4 5; do
+            [ -z "$pid" ] && break
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    pkill -f "${CRT_DIR}/fightcade-crt-hostd daemon" 2>/dev/null || true
+    rm -f "$PENDING" "$LOCKFILE"
+}
+
+case "${1:-}" in
+    daemon)  run_daemon ;;
+    ensure)
+        export DISPLAY=:0.0
+        [ -x "$WRAP" ] || exit 0
+        "$WRAP" hostd-needed 2>/dev/null || exit 0
+        if pgrep -f "${CRT_DIR}/fightcade-crt-hostd daemon" >/dev/null 2>&1; then
+            exit 0
+        fi
+        setsid "$0" daemon >/dev/null 2>&1 </dev/null &
+        ;;
+    stop)    do_stop ;;
+    *)
+        echo "Usage: ${0##*/} ensure|stop|daemon" >&2
+        exit 1
+        ;;
+esac

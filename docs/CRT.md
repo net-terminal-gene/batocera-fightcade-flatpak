@@ -1,0 +1,86 @@
+# CRT / Switchres support
+
+> [!CAUTION]
+> CRT / Switchres support requires [**Batocera-CRT-Script**](https://github.com/ZFEbHVUE/Batocera-CRT-Script)
+> to be installed and configured on your Batocera system. Without it, lobby
+> timing and per-game native resolution switching will not work.
+
+On CRT setups the installer gives Fightcade native-resolution switching during
+gameplay, matching how Batocera's own emulators behave on a CRT. The Fightcade
+lobby, queues, and settings run at your CRT menu timing (e.g. 640x480i from
+EmulationStation or Advanced Game Settings).
+
+Switchres only changes the display when you start a game (TEST GAME,
+ONLINE MATCH, TRAINING or REPLAY), applies that game's native resolution and refresh
+rate, then restores menu timing when the game exits.
+
+## Contents
+
+- [Controls and navigation](#controls--navigation)
+  - [Game controller mapping](#game-controller-mapping)
+  - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
+- [Switchres flags](#switchres-flags)
+- [Recovery](#recovery)
+- [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
+
+## Controls & Navigation
+
+> Fightcade is designed to be used with a **keyboard and mouse**, especially for
+> **chat**. This installer adds **gamepad navigation** so you can move the cursor
+> and open menus without a mouse. **Chat still requires a keyboard.**
+
+### Game controller mapping
+
+For other keyboard shortcuts, see
+[Keyboard shortcuts (HD)](../README.md#keyboard-shortcuts-hd) in the README.
+
+**Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
+= emulator menu bar visible at lobby resolution. **Flycast menu** = in-game overlay
+with cursor visible.
+
+| Where you are | Left Analog/D-pad | Left Analog/D-pad + B | A | SELECT + X | SELECT + Y | SELECT + R1 |
+|---------------|---------------|-----------|---|------------|------------|-------------|
+| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **FBNeo playing** | — | — | — | Open Menu | — | — |
+| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **SNES playing** | — | — | — | Open Menu | — | — |
+| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **Flycast playing** | — | — | — | Open Menu | Resume game | — |
+| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Open Menu | Resume game | — |
+
+### Keyboard (FBNeo / SNES)
+
+| Key | Action |
+|-----|--------|
+| **ESC** | Lobby resolution + open emulator menu (same as SELECT + X) |
+| **Alt+Delete** | Resume native resolution (menu may stay open; press **Alt+Enter** to dismiss) |
+
+Exiting the emulator from the menu returns to Fightcade. Launching a new game
+applies native resolution again automatically.
+
+## Switchres flags
+
+Create an empty flag file to opt out of or force Switchres (content does not
+matter; the file only needs to exist):
+
+```bash
+touch /userdata/system/configs/fightcade-switchres.disable   # disable Switchres
+touch /userdata/system/configs/fightcade-switchres.force     # force Switchres on
+```
+
+Remove the file to undo. `fightcade-diagnose` reports whether either flag is
+present.
+
+## Recovery
+
+| Command | What it does |
+|---------|--------------|
+| `crt/fightcade-crt-recover` | Restore lobby timing and clear stale game sessions |
+| `fightcade-diagnose` | Print install state and CRT flags |
+
+## After a Fightcade Flatpak update
+
+Re-run `install.sh` after a Fightcade Flatpak update (Flathub can overwrite
+`xdg-open`; the installer re-applies the patch from `xdg-open.fc-original`).
+
+[← Back to main README](../README.md)

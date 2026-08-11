@@ -2,11 +2,15 @@
 # Uninstaller for the Fightcade Flatpak ROMs installer.
 #
 # Removes:
-#   - CRT watcher (stopped first; patched configs/display restored)
+#   - Patched Flatpak xdg-open (restored from backup)
+#   - CRT host watcher, Switchres wrapper, recovery helper, pad kbd blocker
 #   - Game hook from /userdata/system/scripts/
 #   - Managed symlinks under ROMs/ (arcade per-zip and dir links)
 #   - Flatpak filesystem overrides for the managed host paths
-#   - Installer scripts from /userdata/system/fightcade-flatpak/
+#   - Installer scripts from /userdata/system/fightcade-flatpak/ (input/, crt/, etc.)
+#
+# Note: fightcade-pad-mouse may keep running until Fightcade is closed; the
+# project dir is removed so it cannot restart after uninstall.
 #
 # Does NOT remove:
 #   - The Fightcade Flatpak itself (use --uninstall-flatpak to also remove it)
@@ -93,14 +97,35 @@ ask_yes_no "Remove Fightcade Flatpak ROMs installer (links, hook, overrides, scr
 }
 
 # ---------------------------------------------------------------------------
-# 0. Stop the CRT watcher (restores any patched configs / display mode)
+# 0. CRT recovery + restore patched Flatpak xdg-open
 # ---------------------------------------------------------------------------
-CRT_WATCH="${PROJECT_DIR}/fightcade-crt-watch"
-if [ -x "$CRT_WATCH" ]; then
-    "$CRT_WATCH" stop 2>/dev/null || true
-    ok "CRT watcher stopped"
+CRT_RECOVER="${PROJECT_DIR}/crt/fightcade-crt-recover"
+LEGACY_CRT_RECOVER="${PROJECT_DIR}/fightcade-crt-recover"
+LEGACY_WATCH="${PROJECT_DIR}/fightcade-crt-watch"
+
+if [ -x "$CRT_RECOVER" ]; then
+    "$CRT_RECOVER" 2>/dev/null || true
+    ok "CRT recovery run"
+elif [ -x "$LEGACY_CRT_RECOVER" ]; then
+    "$LEGACY_CRT_RECOVER" 2>/dev/null || true
+    ok "CRT recovery run (legacy path)"
+elif [ -x "$LEGACY_WATCH" ]; then
+    "$LEGACY_WATCH" stop 2>/dev/null || true
+    ok "Legacy CRT watcher stopped"
 fi
-rm -f /tmp/fightcade-crt-watch.pid /tmp/fightcade-crt-watch.state
+rm -f /tmp/fightcade-crt-watch.pid /tmp/fightcade-crt-watch.state \
+      /tmp/fightcade-crt-watch.lock /tmp/fightcade-switchres-wrap.lock
+
+deploy=$(flatpak info --system --show-location "${APP_ID}" 2>/dev/null || true)
+if [ -n "$deploy" ]; then
+    xdg_open="${deploy}/files/bin/xdg-open"
+    backup="${xdg_open}.fc-original"
+    if [ -f "$backup" ]; then
+        mv -f "$backup" "$xdg_open"
+        chmod 0755 "$xdg_open"
+        ok "Restored Flatpak xdg-open from backup"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Remove game hook
@@ -192,6 +217,7 @@ ok "_fightcade.txt notes removed"
 notice "Removing Flatpak filesystem overrides..."
 
 local_paths=(
+    /userdata/system/fightcade-flatpak
     /userdata/roms/fbneo
     /userdata/roms/megadrive
     /userdata/roms/nes

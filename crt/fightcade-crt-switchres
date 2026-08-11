@@ -1,0 +1,1126 @@
+#!/bin/bash
+# Switchres wrapper for Flatpak Fightcade fcade:// URLs (BUA model).
+# Patched xdg-open writes play.pending for fcade://play/* and runs fcade-quark
+# inside the Flatpak. fightcade-crt-hostd on the host calls dispatch, which runs
+# pre (patch configs) and monitor (switchres session) in the background.
+# This script never launches the game.
+
+APP_ID="com.fightcade.Fightcade"
+FC_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+CRT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "${CRT_DIR}/.." && pwd)"
+LOCKFILE="/tmp/fightcade-switchres-wrap.lock"
+STATEFILE="/tmp/fightcade-switchres-wrap.state"
+PAUSEFILE="/tmp/fightcade-switchres-wrap.pause"
+HOTKEY_PIDFILE="/tmp/fightcade-switchres-wrap.hotkey.pid"
+FBNEO_ACTIVE_FLAG="/tmp/fightcade-fbneo-crt-active"
+FLYCAST_GAME_FLAG="/tmp/fightcade-flycast-game-active"
+MONITOR_PIDFILE="/tmp/fightcade-switchres-wrap.monitor.pid"
+LOG_FILE="/userdata/system/logs/fightcade-crt-switchres.log"
+
+W=""; H=""; R=""
+
+fightcade_pick_display() {
+    [ -S /tmp/.X11-unix/X0 ] && { echo ":0.0"; return; }
+    [ -S /tmp/.X11-unix/X1 ] && { echo ":1.0"; return; }
+    echo ":0.0"
+}
+
+fightcade_cursor_show() {
+    local ctl="${PROJECT_DIR}/input/fightcade-cursor"
+    [ -x "$ctl" ] || return 0
+    DISPLAY=$(fightcade_pick_display) "$ctl" show
+}
+
+fightcade_cursor_hide() {
+    local ctl="${PROJECT_DIR}/input/fightcade-cursor"
+    [ -x "$ctl" ] || return 0
+    DISPLAY=$(fightcade_pick_display) "$ctl" hide
+}
+
+fightcade_should_use_switchres() {
+    export DISPLAY=$(fightcade_pick_display)
+    [ -x /usr/bin/switchres ] || return 1
+    [ -f /userdata/system/configs/fightcade-switchres.disable ] && return 1
+    local dm
+    dm=$(batocera-resolution getDisplayMode 2>/dev/null) || return 1
+    [ "$dm" = "xorg" ] || return 1
+    if [ -f /userdata/system/configs/fightcade-switchres.force ]; then
+        return 0
+    fi
+    local res w
+    res=$(batocera-resolution currentResolution 2>/dev/null) || return 1
+    w="${res%%x*}"
+    case "$w" in
+        '' | *[!0-9]*) return 1 ;;
+    esac
+    [ "$w" -lt 1024 ] || return 1
+    return 0
+}
+
+mame_xml_raw() {
+    /usr/bin/mame/mame -listxml "$1" 2>/dev/null
+}
+
+parse_mame_xml_dims() {
+    local xml="$1"
+    [ -z "$xml" ] && return 1
+    W=$(echo "$xml" | sed -n 's/.*width="\([0-9]*\)".*/\1/p')
+    H=$(echo "$xml" | sed -n 's/.*height="\([0-9]*\)".*/\1/p')
+    R=$(echo "$xml" | sed -n 's/.*refresh="\([0-9.]*\)".*/\1/p')
+    [ -n "$W" ] && [ -n "$H" ] && [ -n "$R" ]
+}
+
+resolve_rom_dims() {
+    local emu="$1" rom="$2"
+    local full_xml display_xml mame_rom="$rom"
+    W=""; H=""; R=""
+
+    case "$rom" in
+        md_*)   W=320; H=224; R=59.92; return 0 ;;
+        nes_*)  W=256; H=240; R=60.10; return 0 ;;
+        pce_*)  W=256; H=240; R=59.82; return 0 ;;
+        tg_*)   W=256; H=240; R=59.82; return 0 ;;
+        sms_*)  W=256; H=192; R=59.92; return 0 ;;
+        gg_*)   W=160; H=144; R=59.92; return 0 ;;
+        cv_*)   W=256; H=192; R=59.92; return 0 ;;
+        sg1k_*) W=256; H=192; R=59.92; return 0 ;;
+        msx_*)  W=256; H=192; R=59.92; return 0 ;;
+        snes_*) W=256; H=224; R=60.10; return 0 ;;
+        flycast_*) mame_rom="${rom#flycast_}" ;;
+    esac
+
+    full_xml=$(mame_xml_raw "$mame_rom")
+    display_xml=$(echo "$full_xml" | grep '<display ')
+    if parse_mame_xml_dims "$display_xml"; then
+        if [ "$W" = "320" ] && [ "$H" = "224" ] && echo "$full_xml" | grep -q 'romof="neogeo"'; then
+            W=304
+        fi
+        return 0
+    fi
+
+    case "$emu" in
+        snes9x)  W=256; H=224; R=60.10; return 0 ;;
+        flycast) W=640; H=480; R=59.94; return 0 ;;
+    esac
+
+    return 1
+}
+
+ini_path_for_emu() {
+    local emu="$1"
+    case "$emu" in
+        fbneo)   echo "${FC_DATA}/config/fcadefbneo/fcadefbneo.ini" ;;
+        ggpofba) echo "${FC_DATA}/config/ggpofba/ggpofba.ini" ;;
+        *)       echo "" ;;
+    esac
+}
+
+snes9x_conf_path() {
+    echo "${FC_DATA}/config/snes9x/fcadesnes9x.conf"
+}
+
+flycast_cfg_path() {
+    echo "${FC_DATA}/config/flycast/emu.cfg"
+}
+
+patch_wine_ini() {
+    local ini="$1" w="$2" h="$3"
+    [ -n "$ini" ] || return 0
+    [ -f "$ini" ] || return 0
+    [ -f "${ini}.bak.switchres" ] || cp "$ini" "${ini}.bak.switchres"
+    sed -i "s/^nVidHorWidth .*/nVidHorWidth $w/" "$ini"
+    sed -i "s/^nVidHorHeight .*/nVidHorHeight $h/" "$ini"
+    sed -i "s/^nVidVerWidth .*/nVidVerWidth $w/" "$ini"
+    sed -i "s/^nVidVerHeight .*/nVidVerHeight $h/" "$ini"
+    sed -i "s/^bVidAutoSwitchFull .*/bVidAutoSwitchFull 1/" "$ini"
+    sed -i "s/^bVidDX9WinFullscreen .*/bVidDX9WinFullscreen 1/" "$ini"
+    sed -i "s/^bVidArcaderesHor .*/bVidArcaderesHor 0/" "$ini"
+    sed -i "s/^bVidArcaderesVer .*/bVidArcaderesVer 0/" "$ini"
+    sed -i "s/^nVidScrnAspectX .*/nVidScrnAspectX 4/" "$ini"
+    sed -i "s/^nVidScrnAspectY .*/nVidScrnAspectY 3/" "$ini"
+    sed -i "s/^nVidVerScrnAspectX .*/nVidVerScrnAspectX 4/" "$ini"
+    sed -i "s/^nVidVerScrnAspectY .*/nVidVerScrnAspectY 3/" "$ini"
+    sed -i "s/^bVidCorrectAspect .*/bVidCorrectAspect 0/" "$ini"
+    sed -i "s/^bVidFullStretch .*/bVidFullStretch 1/" "$ini"
+    sed -i "s/^bMonitorAutoCheck .*/bMonitorAutoCheck 0/" "$ini"
+    sed -i "s/^nWindowPosX .*/nWindowPosX 0/" "$ini"
+    sed -i "s/^nWindowPosY .*/nWindowPosY 0/" "$ini"
+}
+
+restore_ini() {
+    local ini="$1"
+    [ -n "$ini" ] || return 0
+    if [ -f "${ini}.bak.switchres" ]; then
+        mv -f "${ini}.bak.switchres" "$ini"
+    fi
+}
+
+patch_snes9x_conf() {
+    local conf="$1" w="$2" h="$3"
+    [ -f "$conf" ] || return 0
+    cp "$conf" "${conf}.bak.switchres"
+    sed -i 's/^\([[:space:]]*Fullscreen:Enabled[[:space:]]*=\).*/\1 TRUE/' "$conf"
+    sed -i "s/^\([[:space:]]*Fullscreen:Width[[:space:]]*=\).*/\1 $w/" "$conf"
+    sed -i "s/^\([[:space:]]*Fullscreen:Height[[:space:]]*=\).*/\1 $h/" "$conf"
+    sed -i 's/^\([[:space:]]*HideMenu[[:space:]]*=\).*/\1 TRUE/' "$conf"
+    sed -i 's/^\([[:space:]]*Fullscreen:EmulateFullscreen[[:space:]]*=\).*/\1 TRUE/' "$conf"
+    sed -i 's/^\([[:space:]]*Stretch:MaintainAspectRatio[[:space:]]*=\).*/\1 FALSE/' "$conf"
+    sed -i 's/^\([[:space:]]*Stretch:BilinearFilter[[:space:]]*=\).*/\1 FALSE/' "$conf"
+    sed -i "s/^\([[:space:]]*OutputMethod[[:space:]]*=\).*/\1 0/" "$conf"
+}
+
+restore_snes9x_conf() {
+    local conf="$1"
+    if [ -f "${conf}.bak.switchres" ]; then
+        mv -f "${conf}.bak.switchres" "$conf"
+    fi
+}
+
+patch_flycast_cfg() {
+    local cfg="$1"
+    [ -f "$cfg" ] || return 0
+    cp "$cfg" "${cfg}.bak.switchres"
+    sed -i 's/^fullscreen = .*/fullscreen = yes/' "$cfg"
+    sed -i 's/^rend\.vsync = .*/rend.vsync = yes/' "$cfg"
+}
+
+restore_flycast_cfg() {
+    local cfg="$1"
+    if [ -f "${cfg}.bak.switchres" ]; then
+        mv -f "${cfg}.bak.switchres" "$cfg"
+    fi
+}
+
+display_matches_snapshot() {
+    local want_mode="$1"
+    local want_res="$2"
+    local cm cr xr
+    cm=$(batocera-resolution currentMode 2>/dev/null)
+    cr=$(batocera-resolution currentResolution 2>/dev/null)
+    if [ -z "$cr" ]; then
+        xr=$(xrandr 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1x\2/p' | head -1)
+        cr=$xr
+    fi
+    if [ -n "$want_mode" ] && [ -n "$cm" ] && [ "$cm" = "$want_mode" ]; then
+        return 0
+    fi
+    if [ -n "$want_res" ] && [ -n "$cr" ] && [ "$cr" = "$want_res" ]; then
+        return 0
+    fi
+    return 1
+}
+
+poll_snapshot_match() {
+    local want_mode="$1"
+    local want_res="$2"
+    local n
+    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        display_matches_snapshot "$want_mode" "$want_res" && return 0
+        sleep 0.05
+    done
+    return 1
+}
+
+restore_via_xrandr_from_pre_mode() {
+    local pre="$1"
+    local out partres parthz
+    [ -z "$pre" ] && return 1
+    out=$(batocera-resolution currentOutput 2>/dev/null)
+    [ -z "$out" ] && out="DP-1"
+    if echo "$pre" | grep -q '\.'; then
+        partres=$(echo "$pre" | cut -d'.' -f1)
+        parthz=$(echo "$pre" | cut -d'.' -f2-)
+        xrandr --output "$out" --mode "$partres" --rate "$parthz" 2>/dev/null || return 1
+    else
+        xrandr --output "$out" --mode "$pre" 2>/dev/null || return 1
+    fi
+    return 0
+}
+
+restore_display_mode() {
+    local pre="$1"
+    local snapshot_res="$2"
+    local i cr w out
+    export DISPLAY=$(fightcade_pick_display)
+    if [ -z "$pre" ] && [ -z "$snapshot_res" ]; then
+        batocera-resolution minTomaxResolution 2>/dev/null || true
+        sleep 0.35
+        return 0
+    fi
+
+    [ -n "$pre" ] && restore_via_xrandr_from_pre_mode "$pre" || true
+    poll_snapshot_match "$pre" "$snapshot_res" && return 0
+
+    batocera-resolution minTomaxResolution 2>/dev/null || true
+    sleep 0.35
+    poll_snapshot_match "$pre" "$snapshot_res" && return 0
+
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        [ -n "$pre" ] && batocera-resolution setMode "$pre" 2>/dev/null || true
+        poll_snapshot_match "$pre" "$snapshot_res" && return 0
+        sleep 0.2
+        case "$i" in
+            1|3|5|7)
+                [ -n "$pre" ] && restore_via_xrandr_from_pre_mode "$pre" || true
+                poll_snapshot_match "$pre" "$snapshot_res" && return 0
+                ;;
+        esac
+    done
+
+    [ -n "$pre" ] && restore_via_xrandr_from_pre_mode "$pre" || true
+    poll_snapshot_match "$pre" "$snapshot_res" && return 0
+
+    batocera-resolution minTomaxResolution 2>/dev/null || true
+    sleep 0.5
+    display_matches_snapshot "$pre" "$snapshot_res" && return 0
+
+    cr=$(xrandr 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1x\2/p' | head -1)
+    w="${cr%%x*}"
+    case "$w" in
+        '' | *[!0-9]*) ;;
+        *)
+            if [ "$w" -lt 600 ] 2>/dev/null; then
+                out=$(batocera-resolution currentOutput 2>/dev/null)
+                [ -z "$out" ] && out="DP-1"
+                xrandr --output "$out" --mode 641x480i --rate 59.98 2>/dev/null || true
+                sleep 0.35
+                poll_snapshot_match "$pre" "$snapshot_res" && return 0
+                batocera-resolution minTomaxResolution 2>/dev/null || true
+                sleep 0.35
+            fi
+            ;;
+    esac
+}
+
+fightcade_refresh_menu_snapshot() {
+    PRE_MODE=$(batocera-resolution currentMode 2>/dev/null)
+    PRE_RES=$(batocera-resolution currentResolution 2>/dev/null)
+    if [ -z "$PRE_RES" ]; then
+        PRE_RES=$(xrandr 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1x\2/p' | head -1)
+    fi
+}
+
+fightcade_ensure_menu_baseline() {
+    local w h
+    fightcade_refresh_menu_snapshot
+    w="${PRE_RES%%x*}"
+    h="${PRE_RES##*x}"
+    case "$w" in
+        '' | *[!0-9]*) return 0 ;;
+    esac
+    case "$h" in
+        '' | *[!0-9]*) return 0 ;;
+    esac
+    if [ "$w" -lt 512 ] 2>/dev/null && [ "$h" -le 224 ] 2>/dev/null; then
+        batocera-resolution minTomaxResolution 2>/dev/null || true
+        sleep 0.6
+        fightcade_refresh_menu_snapshot
+    fi
+}
+
+fightcade_reassert_switchres_output() {
+    local out mode w h i
+    w="$1"
+    h="$2"
+    [ -z "$w" ] || [ -z "$h" ] && return 0
+    export DISPLAY=$(fightcade_pick_display)
+    out=$(batocera-resolution currentOutput 2>/dev/null)
+    [ -z "$out" ] && out="DP-1"
+    for i in 1 2 3 4 5 6; do
+        mode=$(xrandr 2>/dev/null | awk -v W="$w" -v H="$h" '$1 ~ /^SR-/ && index($1, W "x" H) { print $1; exit }')
+        [ -z "$mode" ] && mode=$(xrandr 2>/dev/null | awk '$1 ~ /^SR-/ { print $1; exit }')
+        [ -z "$mode" ] && return 0
+        xrandr --output "$out" --mode "$mode" 2>/dev/null || true
+        sleep 0.22
+        if xrandr 2>/dev/null | head -1 | grep -q "current ${w} x ${h}"; then
+            return 0
+        fi
+    done
+}
+
+fightcade_drop_stale_switchres_modes() {
+    local out m round
+    export DISPLAY=$(fightcade_pick_display)
+    out=$(batocera-resolution currentOutput 2>/dev/null)
+    [ -z "$out" ] && out="DP-1"
+    for round in 1 2; do
+        for m in $(xrandr 2>/dev/null | awk '$1 ~ /^SR-/ { print $1 }'); do
+            [ -z "$m" ] && continue
+            xrandr --delmode "$out" "$m" 2>/dev/null || true
+            xrandr --rmmode "$m" 2>/dev/null || true
+        done
+        sleep 0.12
+    done
+    sleep 0.15
+}
+
+fightcade_prep_x_before_switchres() {
+    export DISPLAY=$(fightcade_pick_display)
+    batocera-resolution minTomaxResolution 2>/dev/null || true
+    sleep 0.5
+    fightcade_refresh_menu_snapshot
+}
+
+EMU_PGREP_RE='fcadefbneo\.exe|ggpofba-ng\.exe|fcadesnes9x\.exe|flycast\.elf'
+
+emu_pgrep_pattern() {
+    case "$1" in
+        fbneo)   echo 'fcadefbneo\.exe' ;;
+        ggpofba) echo 'ggpofba' ;;
+        snes9x)  echo 'fcadesnes9x\.exe' ;;
+        flycast) echo 'flycast\.elf' ;;
+        *)       echo '__no_emu__' ;;
+    esac
+}
+
+emu_running_for() {
+    local pat
+    pat=$(emu_pgrep_pattern "$1")
+    pgrep -f "$pat" >/dev/null 2>&1
+}
+
+# First wine-menu emulator with a live process (CRT session or HD / no Switchres).
+fightcade_running_wine_menu_emu() {
+    local e
+    for e in fbneo ggpofba snes9x; do
+        if emu_running_for "$e"; then
+            printf '%s\n' "$e"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Wine emulators that use ESC / Alt+Delete / Alt+Enter for in-game menus (FBNeo-style).
+crt_wine_menu_emu() {
+    case "$1" in
+        fbneo|ggpofba|snes9x) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+wine_emu_window_pattern() {
+    case "$1" in
+        fbneo|ggpofba) printf '%s\n' 'FBNeo' ;;
+        snes9x)        printf '%s\n' 'Snes9x' ;;
+        *)             printf '%s\n' '' ;;
+    esac
+}
+
+emu_has_visible_window_for() {
+    local emu="$1"
+    local wins disp pattern wid title
+
+    emu_running_for "$emu" && return 0
+
+    pattern=$(emu_pgrep_pattern "$emu")
+    [ "$pattern" = "__no_emu__" ] && return 1
+    disp=$(fightcade_pick_display)
+
+    if command -v wmctrl >/dev/null 2>&1; then
+        wins=$(DISPLAY="$disp" wmctrl -l 2>/dev/null | grep -i "$pattern")
+        [ -z "$wins" ] && return 1
+        echo "$wins" | grep -qi 'no game loaded' && return 1
+        return 0
+    fi
+
+    if command -v xdotool >/dev/null 2>&1; then
+        for wid in $(DISPLAY="$disp" xdotool search --name . 2>/dev/null); do
+            title=$(DISPLAY="$disp" xdotool getwindowname "$wid" 2>/dev/null) || continue
+            echo "$title" | grep -qi "$pattern" || continue
+            echo "$title" | grep -qi 'no game loaded' && return 1
+            return 0
+        done
+        return 1
+    fi
+
+    return 0
+}
+
+flycast_game_loaded() {
+    local disp wins title wid
+
+    emu_running_for flycast || return 1
+    disp=$(fightcade_pick_display)
+
+    if command -v wmctrl >/dev/null 2>&1; then
+        wins=$(DISPLAY="$disp" wmctrl -l 2>/dev/null | grep -i flycast)
+        [ -z "$wins" ] && return 1
+        echo "$wins" | grep -qi 'no game loaded' && return 1
+        return 0
+    fi
+
+    if command -v xdotool >/dev/null 2>&1; then
+        for wid in $(DISPLAY="$disp" xdotool search --name . 2>/dev/null); do
+            title=$(DISPLAY="$disp" xdotool getwindowname "$wid" 2>/dev/null) || continue
+            echo "$title" | grep -qi flycast || continue
+            echo "$title" | grep -qi 'no game loaded' && return 1
+            return 0
+        done
+        return 1
+    fi
+
+    return 0
+}
+
+fightcade_flycast_game_begin() {
+    touch "$FLYCAST_GAME_FLAG"
+    fightcade_cursor_hide
+}
+
+fightcade_flycast_game_end() {
+    rm -f "$FLYCAST_GAME_FLAG"
+    fightcade_cursor_show
+}
+
+fightcade_kill_wine_orphans() {
+    pkill -f "fcadefbneo" 2>/dev/null || true
+    pkill -f "ggpofba" 2>/dev/null || true
+    pkill -f "fcadesnes9x" 2>/dev/null || true
+    pkill -f "flycast\.elf" 2>/dev/null || true
+    sleep 0.5
+    pkill -9 -f "fcadefbneo" 2>/dev/null || true
+    pkill -9 -f "ggpofba" 2>/dev/null || true
+    pkill -9 -f "fcadesnes9x" 2>/dev/null || true
+    pkill -9 -f "flycast\.elf" 2>/dev/null || true
+}
+
+fightcade_kill_stale_wrappers() {
+    local my_pid=$$ pid
+    for pid in $(pgrep -f 'fightcade-crt-switchres' 2>/dev/null); do
+        [ "$pid" = "$my_pid" ] && continue
+        kill "$pid" 2>/dev/null || true
+    done
+    local n
+    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        pgrep -f 'fightcade-crt-switchres monitor' >/dev/null 2>&1 || break
+        sleep 0.2
+    done
+    if pgrep -f 'fightcade-crt-switchres monitor' >/dev/null 2>&1; then
+        pkill -9 -f 'fightcade-crt-switchres' 2>/dev/null || true
+        sleep 0.25
+    fi
+    rm -f "$MONITOR_PIDFILE"
+}
+
+fightcade_monitor_running() {
+    local mp=""
+    if [ -f "$MONITOR_PIDFILE" ]; then
+        mp=$(cat "$MONITOR_PIDFILE" 2>/dev/null)
+        if [ -n "$mp" ] && kill -0 "$mp" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$MONITOR_PIDFILE"
+    fi
+    pgrep -f 'fightcade-crt-switchres monitor' >/dev/null 2>&1
+}
+
+fightcade_display_at_resolution() {
+    local w="$1" h="$2" cr
+    export DISPLAY=$(fightcade_pick_display)
+    cr=$(batocera-resolution currentResolution 2>/dev/null)
+    if [ -z "$cr" ]; then
+        cr=$(xrandr 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1x\2/p' | head -1)
+    fi
+    [ "${cr}" = "${w}x${h}" ]
+}
+
+fightcade_same_play_session_active() {
+    local emu="$1" rom="$2"
+    [ -f "$STATEFILE" ] || return 1
+    # shellcheck disable=SC1090
+    . "$STATEFILE"
+    [ "${ACTIVE:-0}" = "1" ] || return 1
+    [ "${EMU:-}" = "$emu" ] || return 1
+    [ "${ROM:-}" = "$rom" ] || return 1
+    emu_running_for "$emu" || return 1
+    fightcade_monitor_running || return 1
+    return 0
+}
+
+fightcade_reassert_switchres_session() {
+    local emu ini
+    [ -f "$STATEFILE" ] || return 0
+    # shellcheck disable=SC1090
+    . "$STATEFILE"
+    [ "${ACTIVE:-0}" = "1" ] || return 0
+    [ -n "${W:-}" ] && [ -n "${H:-}" ] && [ -n "${R:-}" ] || return 0
+    export DISPLAY=$(fightcade_pick_display)
+    emu="${EMU:-}"
+    ini="${INI_PATH:-}"
+    fightcade_drop_stale_switchres_modes
+    /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+    fightcade_reassert_switchres_output "$W" "$H"
+    case "$emu" in
+        fbneo|ggpofba)
+            patch_wine_ini "$ini" "$W" "$H"
+            fightcade_refresh_fbneo_video "$W" "$H"
+            ;;
+        snes9x)
+            patch_snes9x_conf "${SNES9X_CONF:-}" "$W" "$H"
+            fightcade_refresh_wine_emu_video snes9x "$W" "$H"
+            ;;
+        flycast)
+            patch_flycast_cfg "${FLYCAST_CFG:-}"
+            ;;
+    esac
+    crt_wine_menu_emu "$emu" && touch "$FBNEO_ACTIVE_FLAG"
+    if crt_wine_menu_emu "$emu" && command -v evtest >/dev/null 2>&1; then
+        if [ ! -f "$HOTKEY_PIDFILE" ] || ! kill -0 "$(cat "$HOTKEY_PIDFILE" 2>/dev/null)" 2>/dev/null; then
+            start_crt_hotkey_watch "${PRE_MODE:-}" "${PRE_RES:-}" "$W" "$H" "$R" "$emu" "$ini" "${SNES9X_CONF:-}"
+        fi
+    fi
+}
+
+fightcade_reassert_wine_emu_window() {
+    local pattern="$1" w="$2" h="$3"
+    local wid disp
+
+    command -v xdotool >/dev/null 2>&1 || return 0
+    [ -n "$pattern" ] || return 0
+    disp=$(fightcade_pick_display)
+    wid=$(DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1)
+    [ -z "$wid" ] && return 0
+    DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+    DISPLAY="$disp" xdotool windowsize "$wid" "$w" "$h" 2>/dev/null || true
+}
+
+fightcade_refresh_wine_emu_video() {
+    local emu="$1" w="$2" h="$3"
+    local pattern wid disp
+
+    command -v xdotool >/dev/null 2>&1 || return 0
+    pattern=$(wine_emu_window_pattern "$emu")
+    [ -n "$pattern" ] || return 0
+    disp=$(fightcade_pick_display)
+    wid=$(DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1)
+    [ -z "$wid" ] && return 0
+    DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
+    DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+    DISPLAY="$disp" xdotool windowsize "$wid" "$w" "$h" 2>/dev/null || true
+    fightcade_reassert_wine_emu_window "$pattern" "$w" "$h"
+}
+
+fightcade_refresh_fbneo_video() {
+    fightcade_refresh_wine_emu_video fbneo "$1" "$2"
+}
+
+fightcade_reassert_fbneo_window() {
+    fightcade_reassert_wine_emu_window 'FBNeo' "$1" "$2"
+}
+
+crt_is_paused() {
+    [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]
+}
+
+crt_keyboard_event_nodes() {
+    # Real keyboards only. Skip power buttons, evmapy, and gamepad HID kbd nodes.
+    awk '
+        /^N: Name="/ {
+            name = $0
+            sub(/^N: Name="/, "", name)
+            sub(/"$/, "", name)
+        }
+        /^H: Handlers=/ {
+            if ($0 !~ /kbd/) next
+            if (name ~ /(Power Button|Sleep Button|evmapy)/) next
+            if (name ~ /(gamepad|controller|joystick|Gamepad|Joystick|EasySMX|Sony|DualSense|Xbox|8BitDo|Consumer Control|System Control)/) next
+            if (match($0, /event[0-9]+/)) {
+                print "/dev/input/" substr($0, RSTART, RLENGTH)
+            }
+        }
+    ' /proc/bus/input/devices
+}
+
+# Wine-emu menu pause: restore lobby timing while emulator menu is open.
+crt_pause_switchres() {
+    local pre_mode="$1" pre_res="$2"
+    [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ] && return 0
+    export DISPLAY=$(fightcade_pick_display)
+    restore_display_mode "$pre_mode" "$pre_res"
+    printf '1\n' > "$PAUSEFILE"
+    fightcade_cursor_show
+}
+
+crt_resume_switchres() {
+    local w="$1" h="$2" r="$3" emu="$4" ini="$5" snes9x_conf="$6"
+    [ ! -f "$PAUSEFILE" ] && return 0
+    [ "$(cat "$PAUSEFILE" 2>/dev/null)" != "1" ] && return 0
+    export DISPLAY=$(fightcade_pick_display)
+    fightcade_drop_stale_switchres_modes
+    /usr/bin/switchres "$w" "$h" "$r" -s -k 2>&1 || true
+    fightcade_reassert_switchres_output "$w" "$h"
+    printf '0\n' > "$PAUSEFILE"
+    case "$emu" in
+        fbneo|ggpofba)
+            patch_wine_ini "$ini" "$w" "$h"
+            fightcade_refresh_wine_emu_video "$emu" "$w" "$h"
+            ;;
+        snes9x)
+            patch_snes9x_conf "$snes9x_conf" "$w" "$h"
+            fightcade_refresh_wine_emu_video snes9x "$w" "$h"
+            ;;
+    esac
+}
+
+fightcade_wine_emu_send_key() {
+    local emu="$1" key="$2"
+    local pattern wid disp
+
+    command -v xdotool >/dev/null 2>&1 || return 0
+    pattern=$(wine_emu_window_pattern "$emu")
+    [ -n "$pattern" ] || return 0
+    disp=$(fightcade_pick_display)
+    wid=$(DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1)
+    [ -n "$wid" ] && DISPLAY="$disp" xdotool key --window "$wid" "$key" 2>/dev/null || true
+}
+
+fightcade_fbneo_send_key() {
+    fightcade_wine_emu_send_key fbneo "$1"
+}
+
+# Wine emu with menu open: Alt+Delete enters fullscreen, Alt+Enter dismisses the menu.
+# mode=full sends both; mode=enter_only sends Alt+Enter (keyboard already sent Alt+Delete).
+fightcade_wine_emu_resume_keys() {
+    local emu="$1" mode="${2:-full}"
+
+    if [ "$mode" = "full" ]; then
+        fightcade_wine_emu_send_key "$emu" alt+Delete
+        sleep 0.15
+    fi
+    fightcade_wine_emu_send_key "$emu" alt+Return
+}
+
+fightcade_fbneo_resume_keys() {
+    fightcade_wine_emu_resume_keys fbneo "$1"
+}
+
+crt_trigger_resume() {
+    local w="$1" h="$2" r="$3" emu="$4" ini="$5" snes9x_conf="$6"
+    local resume_mode="${7:-full}"
+
+    crt_is_paused || return 0
+    crt_resume_switchres "$w" "$h" "$r" "$emu" "$ini" "$snes9x_conf"
+    sleep 0.12
+    fightcade_wine_emu_resume_keys "$emu" "$resume_mode"
+    fightcade_cursor_hide
+}
+
+crt_hotkey_watch_one() {
+    local dev="$1" emu="$2" pre_mode="$3" pre_res="$4" w="$5" h="$6" r="$7" ini="$8" snes9x_conf="$9"
+    local alt_down=0 last_toggle=0 now
+
+    [ -r "$dev" ] || return 0
+    command -v evtest >/dev/null 2>&1 || return 0
+
+    while IFS= read -r line; do
+        emu_running_for "$emu" || break
+
+        case "$line" in
+            *"code 1 (KEY_ESC), value 1"*)
+                now=$(date +%s)
+                [ $((now - last_toggle)) -lt 1 ] && continue
+                crt_is_paused && continue
+                last_toggle=$now
+                crt_pause_switchres "$pre_mode" "$pre_res"
+                ;;
+            *"code 56 (KEY_LEFTALT), value 1"*|*"code 100 (KEY_RIGHTALT), value 1"*)
+                alt_down=1
+                ;;
+            *"code 56 (KEY_LEFTALT), value 0"*|*"code 100 (KEY_RIGHTALT), value 0"*)
+                alt_down=0
+                ;;
+            *"code 111 (KEY_DELETE), value 1"*|*"code 14 (KEY_BACKSPACE), value 1"*)
+                [ "$alt_down" != "1" ] && continue
+                now=$(date +%s)
+                [ $((now - last_toggle)) -lt 1 ] && continue
+                last_toggle=$now
+                crt_trigger_resume "$w" "$h" "$r" "$emu" "$ini" "$snes9x_conf" enter_only
+                ;;
+        esac
+    done < <(evtest "$dev" 2>/dev/null)
+}
+
+start_crt_hotkey_watch() {
+    local pre_mode="$1" pre_res="$2" w="$3" h="$4" r="$5" emu="$6" ini="$7" snes9x_conf="$8"
+    local dev
+    local block_pad="${CRT_DIR}/fightcade-crt-block-pad-kbd"
+
+    stop_crt_hotkey_watch
+    printf '0\n' > "$PAUSEFILE"
+    crt_wine_menu_emu "$emu" && touch "$FBNEO_ACTIVE_FLAG"
+
+    if [ -x "$block_pad" ]; then
+        "$block_pad" start 2>/dev/null || true
+    fi
+
+    (
+        for dev in $(crt_keyboard_event_nodes); do
+            crt_hotkey_watch_one "$dev" "$emu" "$pre_mode" "$pre_res" "$w" "$h" "$r" "$ini" "$snes9x_conf" &
+        done
+        wait
+    ) &
+    echo $! > "$HOTKEY_PIDFILE"
+}
+
+stop_crt_hotkey_watch() {
+    local hp=""
+    if [ -f "$HOTKEY_PIDFILE" ]; then
+        hp=$(cat "$HOTKEY_PIDFILE" 2>/dev/null)
+        rm -f "$HOTKEY_PIDFILE"
+        [ -n "$hp" ] && kill "$hp" 2>/dev/null || true
+        [ -n "$hp" ] && pkill -P "$hp" 2>/dev/null || true
+        for _ in 1 2 3 4 5; do
+            [ -z "$hp" ] && break
+            kill -0 "$hp" 2>/dev/null || break
+            sleep 0.1
+        done
+        [ -n "$hp" ] && kill -9 "$hp" 2>/dev/null || true
+        [ -n "$hp" ] && pkill -9 -P "$hp" 2>/dev/null || true
+    fi
+    rm -f "$PAUSEFILE" "$FBNEO_ACTIVE_FLAG"
+    pkill -f 'evtest /dev/input/event' 2>/dev/null || true
+    local block_pad="${CRT_DIR}/fightcade-crt-block-pad-kbd"
+    if [ -x "$block_pad" ]; then
+        "$block_pad" stop 2>/dev/null || true
+    fi
+}
+
+restore_all_configs() {
+    restore_ini "${FC_DATA}/config/fcadefbneo/fcadefbneo.ini"
+    restore_ini "${FC_DATA}/config/ggpofba/ggpofba.ini"
+    restore_snes9x_conf "$(snes9x_conf_path)"
+    restore_flycast_cfg "$(flycast_cfg_path)"
+}
+
+fightcade_normalize_url() {
+    local url="$1"
+    url="${url%%#*}"
+    url="${url%%\?*}"
+    printf '%s\n' "$url"
+}
+
+fightcade_parse_play_url() {
+    local url="$1"
+    url=$(fightcade_normalize_url "$url")
+    if [[ "$url" =~ ^fcade://play/([^/]+)/([^/]+) ]]; then
+        EMU_PARSED="${BASH_REMATCH[1]}"
+        ROM_PARSED="${BASH_REMATCH[2]}"
+        return 0
+    fi
+    return 1
+}
+
+fightcade_is_play_url() {
+    fightcade_parse_play_url "$1"
+}
+
+fightcade_save_session_state() {
+    local emu="$1" rom="$2" ini="$3" snes9x_conf="$4" flycast_cfg="$5" active="$6"
+    cat > "$STATEFILE" <<STATE
+ACTIVE=${active}
+EMU=${emu}
+ROM=${rom}
+W=${W}
+H=${H}
+R=${R}
+PRE_MODE=${PRE_MODE}
+PRE_RES=${PRE_RES}
+INI_PATH=${ini}
+SNES9X_CONF=${snes9x_conf}
+FLYCAST_CFG=${flycast_cfg}
+STATE
+}
+
+fightcade_clear_session_state() {
+    rm -f "$STATEFILE"
+}
+
+fightcade_pre_play() {
+    local URL emu rom ini snes9x_conf="" flycast_cfg=""
+
+    URL=$(fightcade_normalize_url "$1")
+    export DISPLAY=$(fightcade_pick_display)
+
+    fightcade_kill_stale_wrappers
+    restore_all_configs
+
+    if ! fightcade_should_use_switchres; then
+        fightcade_save_session_state "" "" "" "" "" 0
+        return 0
+    fi
+
+    if ! fightcade_parse_play_url "$URL"; then
+        fightcade_save_session_state "" "" "" "" "" 0
+        return 0
+    fi
+    emu="$EMU_PARSED"
+    rom="$ROM_PARSED"
+
+    if ! resolve_rom_dims "$emu" "$rom"; then
+        fightcade_save_session_state "$emu" "$rom" "" "" "" 0
+        return 0
+    fi
+
+    ini=$(ini_path_for_emu "$emu")
+    [ "$emu" = "snes9x" ] && snes9x_conf=$(snes9x_conf_path)
+    [ "$emu" = "flycast" ] && flycast_cfg=$(flycast_cfg_path)
+
+    case "$emu" in
+        fbneo|ggpofba) patch_wine_ini "$ini" "$W" "$H" ;;
+        snes9x)        patch_snes9x_conf "$snes9x_conf" "$W" "$H" ;;
+        flycast)       patch_flycast_cfg "$flycast_cfg" ;;
+    esac
+
+    fightcade_ensure_menu_baseline
+    fightcade_save_session_state "$emu" "$rom" "$ini" "$snes9x_conf" "$flycast_cfg" 1
+}
+
+fightcade_dispatch() {
+    local URL="$1"
+    URL=$(fightcade_normalize_url "$URL")
+    fightcade_is_play_url "$URL" || return 0
+    fightcade_parse_play_url "$URL" || return 0
+
+    export DISPLAY=$(fightcade_pick_display)
+    mkdir -p "$(dirname "$LOG_FILE")"
+
+    if fightcade_same_play_session_active "$EMU_PARSED" "$ROM_PARSED"; then
+        local sw sh
+        sw=""; sh=""
+        if [ -f "$STATEFILE" ]; then
+            # shellcheck disable=SC1090
+            . "$STATEFILE"
+            sw="${W:-}"; sh="${H:-}"
+        fi
+        if fightcade_display_at_resolution "$sw" "$sh"; then
+            printf '%s dispatch skip (already active): %s\n' "$(date '+%F %T')" "$URL" >> "$LOG_FILE"
+            return 0
+        fi
+        printf '%s dispatch reassert (wrong display): %s\n' "$(date '+%F %T')" "$URL" >> "$LOG_FILE"
+        fightcade_reassert_switchres_session
+        return 0
+    fi
+
+    if [ -f "$STATEFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATEFILE"
+        if [ "${ACTIVE:-0}" = "1" ] && [ "${EMU:-}" = "$EMU_PARSED" ] && [ "${ROM:-}" = "$ROM_PARSED" ] \
+            && emu_running_for "$EMU_PARSED" && ! fightcade_monitor_running; then
+            printf '%s dispatch monitor restart: %s\n' "$(date '+%F %T')" "$URL" >> "$LOG_FILE"
+            fightcade_kill_stale_wrappers
+            nohup env DISPLAY="$DISPLAY" "$0" monitor "$URL" >>"$LOG_FILE" 2>&1 &
+            disown 2>/dev/null || true
+            return 0
+        fi
+    fi
+
+    printf '%s dispatch: %s\n' "$(date '+%F %T')" "$URL" >> "$LOG_FILE"
+    fightcade_pre_play "$URL"
+    nohup env DISPLAY="$DISPLAY" "$0" monitor "$URL" >>"$LOG_FILE" 2>&1 &
+    disown 2>/dev/null || true
+}
+
+fightcade_monitor_play() {
+    local URL="$1"
+    local emu rom ini snes9x_conf flycast_cfg active
+    local emu_deadline emu_found restore_done=0
+
+    URL=$(fightcade_normalize_url "$URL")
+
+    exec 9>"$LOCKFILE"
+    flock -n 9 || {
+        fightcade_kill_stale_wrappers
+        flock 9
+    }
+
+    [ -f "$STATEFILE" ] || return 0
+    # shellcheck disable=SC1090
+    . "$STATEFILE"
+
+    active="${ACTIVE:-0}"
+    emu="${EMU:-}"
+    rom="${ROM:-}"
+    ini="${INI_PATH:-}"
+    snes9x_conf="${SNES9X_CONF:-}"
+    flycast_cfg="${FLYCAST_CFG:-}"
+
+    [ "$active" = "1" ] || return 0
+    [ -n "$emu" ] || return 0
+
+    echo $$ > "$MONITOR_PIDFILE"
+
+    session_cleanup() {
+        [ "$restore_done" = 1 ] && return 0
+        export DISPLAY=$(fightcade_pick_display)
+        stop_crt_hotkey_watch
+        fightcade_flycast_game_end
+        rm -f "$MONITOR_PIDFILE"
+        restore_ini "$ini"
+        restore_snes9x_conf "$snes9x_conf"
+        restore_flycast_cfg "$flycast_cfg"
+        restore_display_mode "${PRE_MODE:-}" "${PRE_RES:-}"
+        fightcade_clear_session_state
+        restore_done=1
+    }
+    trap 'session_cleanup' EXIT INT TERM HUP
+
+    emu_deadline=$((SECONDS + 15))
+    emu_found=0
+    while [ "$SECONDS" -lt "$emu_deadline" ]; do
+        if emu_running_for "$emu"; then
+            emu_found=1
+            break
+        fi
+        sleep 0.25
+    done
+
+    if [ "$emu_found" -eq 0 ]; then
+        session_cleanup
+        trap - EXIT INT TERM HUP
+        return 0
+    fi
+
+    if crt_wine_menu_emu "$emu"; then
+        touch "$FBNEO_ACTIVE_FLAG"
+    fi
+
+    export DISPLAY=$(fightcade_pick_display)
+    fightcade_prep_x_before_switchres
+
+    fightcade_drop_stale_switchres_modes
+    /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+    fightcade_reassert_switchres_output "$W" "$H"
+    sleep 4
+    fightcade_reassert_switchres_output "$W" "$H"
+
+    if crt_wine_menu_emu "$emu" && command -v evtest >/dev/null 2>&1; then
+        start_crt_hotkey_watch "${PRE_MODE:-}" "${PRE_RES:-}" "$W" "$H" "$R" "$emu" "$ini" "$snes9x_conf"
+    fi
+
+    if [ "$emu" = "flycast" ]; then
+        local flycast_deadline=$((SECONDS + 120))
+        while [ "$SECONDS" -lt "$flycast_deadline" ] && emu_running_for flycast; do
+            if flycast_game_loaded; then
+                fightcade_flycast_game_begin
+                break
+            fi
+            sleep 0.5
+        done
+    fi
+
+    while emu_running_for "$emu"; do
+        if [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]; then
+            sleep 0.4
+            continue
+        fi
+        if [ "$emu" = "flycast" ]; then
+            if flycast_game_loaded; then
+                [ -f "$FLYCAST_GAME_FLAG" ] || fightcade_flycast_game_begin
+            else
+                [ -f "$FLYCAST_GAME_FLAG" ] && fightcade_flycast_game_end
+            fi
+        fi
+        if ! emu_has_visible_window_for "$emu"; then
+            sleep 1
+            if [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]; then
+                continue
+            fi
+            emu_has_visible_window_for "$emu" || break
+        fi
+        sleep 0.4
+    done
+    sleep 0.45
+
+    session_cleanup
+    trap - EXIT INT TERM HUP
+}
+
+fightcade_emergency_recover() {
+    export DISPLAY=$(fightcade_pick_display)
+    stop_crt_hotkey_watch
+    fightcade_flycast_game_end
+    fightcade_kill_stale_wrappers
+    fightcade_kill_wine_orphans
+    restore_all_configs
+    fightcade_drop_stale_switchres_modes
+    fightcade_clear_session_state
+    batocera-resolution minTomaxResolution 2>/dev/null || true
+    sleep 0.35
+}
+
+# Gamepad combo (via fightcade-pad-mouse): emulator menu pause/resume.
+# CRT (ACTIVE=1): pause/resume Switchres plus emulator keys.
+# HD (no Switchres session): same keys only; display stays at desktop resolution.
+fightcade_crt_esc_pause() {
+    local emu=""
+
+    if [ -f "$STATEFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATEFILE"
+        if [ "${ACTIVE:-0}" = "1" ]; then
+            crt_wine_menu_emu "${EMU:-}" || return 0
+            emu_running_for "${EMU:-}" || return 0
+            crt_pause_switchres "${PRE_MODE:-}" "${PRE_RES:-}"
+            fightcade_wine_emu_send_key "${EMU:-}" Escape
+            fightcade_cursor_show
+            return 0
+        fi
+    fi
+
+    emu=$(fightcade_running_wine_menu_emu) || return 0
+    fightcade_wine_emu_send_key "$emu" Escape
+    fightcade_cursor_show
+}
+
+fightcade_crt_resume() {
+    local emu=""
+
+    if [ -f "$STATEFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATEFILE"
+        if [ "${ACTIVE:-0}" = "1" ]; then
+            crt_wine_menu_emu "${EMU:-}" || return 0
+            emu_running_for "${EMU:-}" || return 0
+            crt_trigger_resume "${W}" "${H}" "${R}" "${EMU:-}" "${INI_PATH:-}" "${SNES9X_CONF:-}" full
+            return 0
+        fi
+    fi
+
+    emu=$(fightcade_running_wine_menu_emu) || return 0
+    fightcade_wine_emu_resume_keys "$emu" full
+    fightcade_cursor_hide
+}
+
+case "${1:-}" in
+    recover)
+        fightcade_emergency_recover
+        ;;
+    hostd-needed)
+        fightcade_should_use_switchres
+        ;;
+    dispatch)
+        fightcade_dispatch "${2:-}"
+        ;;
+    pre)
+        fightcade_pre_play "${2:-}"
+        ;;
+    monitor)
+        fightcade_monitor_play "${2:-}"
+        ;;
+    crt-pause)
+        fightcade_crt_esc_pause
+        ;;
+    crt-resume)
+        fightcade_crt_resume
+        ;;
+    fcade://*)
+        fightcade_dispatch "$1"
+        fightcade_monitor_play "$1"
+        ;;
+    *)
+        echo "Usage: ${0##*/} recover | dispatch <url> | pre <url> | monitor <url> | crt-pause | crt-resume | fcade://play/<emu>/<rom>" >&2
+        exit 1
+        ;;
+esac

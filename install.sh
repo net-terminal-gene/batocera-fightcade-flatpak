@@ -10,11 +10,10 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-crt-watch fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
-ART_REPO_PATH="images/Fightcade-image.png"
-ART_NAME="Fightcade-image.png"
+ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
 FLATPAK_ROMS_DIR="/userdata/roms/flatpak"
 GAMELIST="${FLATPAK_ROMS_DIR}/gamelist.xml"
 ES_SERVER="http://127.0.0.1:1234"
@@ -120,14 +119,14 @@ fetch_files() {
 
     if is_local_source; then
         source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-        for file in ${FILES} ${ART_REPO_PATH}; do
+        for file in ${FILES} ${ART_FILES}; do
             dest_dir=$(dirname "${destination}/${file}")
             [ "${dest_dir}" != "${destination}" ] && mkdir -p "${dest_dir}"
             cp "${source_dir}/${file}" "${destination}/${file}"
         done
     else
         command -v curl >/dev/null 2>&1 || fail "curl is required for direct GitHub installation."
-        for file in ${FILES} ${ART_REPO_PATH}; do
+        for file in ${FILES} ${ART_FILES}; do
             dest_dir=$(dirname "${destination}/${file}")
             [ "${dest_dir}" != "${destination}" ] && mkdir -p "${dest_dir}"
             curl -fsSL --retry 3 --connect-timeout 15 \
@@ -183,11 +182,114 @@ install_fightcade_flatpak() {
 # Flatpak filesystem overrides required for every linked host path.
 # ---------------------------------------------------------------------------
 
+flatpak_deploy_dir() {
+    flatpak info --system --show-location "${APP_ID}" 2>/dev/null
+}
+
+patch_flatpak_xdg_open() {
+    local deploy xdg_open backup wrap
+    deploy=$(flatpak_deploy_dir) || true
+    [ -n "${deploy}" ] || fail "Could not locate Flatpak deploy dir for ${APP_ID}."
+
+    xdg_open="${deploy}/files/bin/xdg-open"
+    backup="${xdg_open}.fc-original"
+    wrap="${PROJECT_DIR}/crt/fightcade-crt-switchres"
+
+    [ -f "${xdg_open}" ] || fail "Flatpak xdg-open not found at ${xdg_open}"
+
+    if [ ! -f "${backup}" ]; then
+        cp -a "${xdg_open}" "${backup}"
+        ok "Backed up Flatpak xdg-open to ${backup}"
+    fi
+
+    cat > "${xdg_open}" <<XDGOPEN
+#!/bin/bash
+# Patched by ${PROJECT_DIR}/install.sh for Batocera CRT Switchres (BUA model).
+# fcade://play/* writes play.pending for fightcade-crt-hostd; fcade-quark stays in Flatpak.
+
+if [[ "\$1" == fcade://* ]]; then
+  if [[ "\$1" == fcade://play/* ]]; then
+    printf '%s\n' "\$1" > "${PROJECT_DIR}/play.pending"
+  fi
+  exec /app/bin/fcade-quark "\$@"
+fi
+
+if [[ "\$1" =~ ^(http|https):// ]] && [ -x "/app/steamos/bin/min-browser" ]; then
+    /app/steamos/bin/min-browser "\$@"
+    exit 0
+fi
+
+/usr/bin/xdg-open "\$@"
+XDGOPEN
+    chmod 0755 "${xdg_open}"
+    ok "Patched Flatpak xdg-open for fcade:// Switchres wrapper"
+}
+
+migrate_input_layout() {
+  local pd="$1" name
+  mkdir -p "${pd}/input"
+  for name in fightcade-pad-mouse fightcade-cursor; do
+    if [ -f "${pd}/${name}" ] && [ ! -e "${pd}/input/${name}" ]; then
+      mv "${pd}/${name}" "${pd}/input/${name}"
+    fi
+  done
+}
+
+migrate_crt_layout() {
+  local pd="$1" name
+  mkdir -p "${pd}/crt"
+  for name in fightcade-crt-hostd fightcade-crt-recover fightcade-crt-block-pad-kbd; do
+    if [ -f "${pd}/${name}" ] && [ ! -e "${pd}/crt/${name}" ]; then
+      mv "${pd}/${name}" "${pd}/crt/${name}"
+    fi
+  done
+  if [ -f "${pd}/switchres_fightcade_wrap.sh" ] && [ ! -e "${pd}/crt/fightcade-crt-switchres" ]; then
+    mv "${pd}/switchres_fightcade_wrap.sh" "${pd}/crt/fightcade-crt-switchres"
+  fi
+  if [ -f "${pd}/crt/switchres_fightcade_wrap.sh" ] && [ ! -e "${pd}/crt/fightcade-crt-switchres" ]; then
+    mv "${pd}/crt/switchres_fightcade_wrap.sh" "${pd}/crt/fightcade-crt-switchres"
+  fi
+  if [ -f "${pd}/crt/fightcade-switchres" ] && [ ! -e "${pd}/crt/fightcade-crt-switchres" ]; then
+    mv "${pd}/crt/fightcade-switchres" "${pd}/crt/fightcade-crt-switchres"
+  fi
+}
+
+remove_legacy_duplicates() {
+  local pd="$1"
+  if [ -x "${pd}/input/fightcade-pad-mouse" ] && [ -f "${pd}/fightcade-pad-mouse" ]; then
+    rm -f "${pd}/fightcade-pad-mouse"
+  fi
+  if [ -x "${pd}/input/fightcade-cursor" ] && [ -f "${pd}/fightcade-cursor" ]; then
+    rm -f "${pd}/fightcade-cursor"
+  fi
+  if [ -x "${pd}/crt/fightcade-crt-switchres" ] && [ -f "${pd}/switchres_fightcade_wrap.sh" ]; then
+    rm -f "${pd}/switchres_fightcade_wrap.sh"
+  fi
+  if [ -x "${pd}/crt/fightcade-crt-hostd" ] && [ -f "${pd}/fightcade-crt-hostd" ]; then
+    rm -f "${pd}/fightcade-crt-hostd"
+  fi
+  if [ -x "${pd}/crt/fightcade-crt-recover" ] && [ -f "${pd}/fightcade-crt-recover" ]; then
+    rm -f "${pd}/fightcade-crt-recover"
+  fi
+}
+
+stop_legacy_crt_watch() {
+    local legacy="${PROJECT_DIR}/fightcade-crt-watch"
+    if [ -x "${legacy}" ]; then
+        "${legacy}" stop 2>/dev/null || true
+        rm -f "${legacy}"
+        ok "Removed legacy fightcade-crt-watch log daemon"
+    fi
+    rm -f /tmp/fightcade-crt-watch.pid /tmp/fightcade-crt-watch.lock \
+          /tmp/fightcade-crt-watch.state /tmp/fightcade-crt-watch.pause
+}
+
 apply_overrides() {
     notice "Applying Flatpak filesystem overrides..."
 
     local paths
     paths=(
+        /userdata/system/fightcade-flatpak
         /userdata/roms/fbneo
         /userdata/roms/megadrive
         /userdata/roms/nes
@@ -217,8 +319,9 @@ apply_overrides() {
 
 # ---------------------------------------------------------------------------
 # Artwork + gamelist.xml for the ES Ports entry.
-# batocera-flatpak-update installs the app icon as images/Fightcade.png; we add
-# the splash artwork (Fightcade-image.png) and a gamelist entry pointing at it.
+# batocera-flatpak-update may install images/Fightcade.png from the Flatpak icon;
+# we ship Fightcade.png (logo), Fightcade-logo.png (marquee), and
+# Fightcade-thumb.png (thumbnail splash) and wire gamelist.xml to match.
 # ---------------------------------------------------------------------------
 
 fightcade_game_entry() {
@@ -226,8 +329,9 @@ fightcade_game_entry() {
   <game>
     <path>./Fightcade.flatpak</path>
     <name>Fightcade</name>
-    <image>./images/Fightcade-image.png</image>
-    <thumbnail>./images/Fightcade.png</thumbnail>
+    <image>./images/Fightcade.png</image>
+    <marquee>./images/Fightcade-logo.png</marquee>
+    <thumbnail>./images/Fightcade-thumb.png</thumbnail>
   </game>
 ENTRY
 }
@@ -236,8 +340,11 @@ install_artwork() {
     notice "Installing Fightcade artwork..."
 
     mkdir -p "${FLATPAK_ROMS_DIR}/images"
-    install -m 0644 "${TMP_DIR}/${ART_REPO_PATH}" "${FLATPAK_ROMS_DIR}/images/${ART_NAME}"
-    ok "Artwork installed: ${FLATPAK_ROMS_DIR}/images/${ART_NAME}"
+    local art
+    for art in ${ART_FILES}; do
+        install -m 0644 "${TMP_DIR}/${art}" "${FLATPAK_ROMS_DIR}/images/$(basename "${art}")"
+        ok "Artwork installed: ${FLATPAK_ROMS_DIR}/images/$(basename "${art}")"
+    done
 
     if [ ! -f "${GAMELIST}" ]; then
         {
@@ -248,7 +355,7 @@ install_artwork() {
         } > "${GAMELIST}"
         ok "Created ${GAMELIST} with Fightcade entry"
     elif grep -q '<path>\./Fightcade\.flatpak</path>' "${GAMELIST}"; then
-        notice "Existing gamelist already has a Fightcade entry; leaving it unchanged"
+        notice "Existing gamelist has a Fightcade entry; refreshing artwork via EmulationStation"
     else
         awk -v entry="$(fightcade_game_entry)" \
             '/<\/gameList>/ { print entry } { print }' \
@@ -323,6 +430,9 @@ notice "Fetching scripts..."
 fetch_files "${TMP_DIR}"
 
 mkdir -p "${PROJECT_DIR}" "${SCRIPTS_DIR}" "${LOG_DIR}"
+migrate_input_layout "${PROJECT_DIR}"
+migrate_crt_layout "${PROJECT_DIR}"
+remove_legacy_duplicates "${PROJECT_DIR}"
 
 for file in ${FILES}; do
     install -m 0755 "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
@@ -335,6 +445,10 @@ ok "Game hook installed to ${SCRIPTS_DIR}/fightcade-game-hook"
 
 # Apply Flatpak filesystem overrides
 apply_overrides
+
+# Patch Flatpak xdg-open (BUA-style fcade:// intercept; re-applied after Flatpak updates)
+patch_flatpak_xdg_open
+stop_legacy_crt_watch
 
 # First sync
 notice "Running initial ROM sync..."
@@ -368,9 +482,11 @@ info ""
 info "Dreamcast note: the BIOS (dc_boot.bin, dc_flash.bin) must live at:"
 info "  /userdata/saves/flatpak/data/.var/app/${APP_ID}/config/flycast/data/"
 info ""
-info "CRT (Switchres): on xorg CRT setups, games switch to their native"
-info "modeline automatically via the configured monitor profile. Disable with:"
+info "CRT (Switchres): on xorg CRT setups, fcade:// launches are wrapped like"
+info "the BUA Ports addon (no log daemon). Disable with:"
 info "  touch /userdata/system/configs/fightcade-switchres.disable"
+info "Recovery after a stuck display:"
+info "  ${PROJECT_DIR}/crt/fightcade-crt-recover"
 info ""
 info "To check install state: ${PROJECT_DIR}/fightcade-diagnose"
 info "To remove:              ${PROJECT_DIR}/uninstall.sh"

@@ -1,0 +1,52 @@
+#!/bin/bash
+# Show or hide the X mouse cursor during Fightcade lobby vs in-game sessions.
+# Uses a dedicated unclutter instance (pidfile) so we never touch ES unclutter.
+#
+# Usage: fightcade-cursor show|hide
+
+PIDFILE="/tmp/fightcade-cursor-unclutter.pid"
+
+pick_display() {
+    [ -S /tmp/.X11-unix/X0 ] && { echo ":0.0"; return; }
+    [ -S /tmp/.X11-unix/X1 ] && { echo ":1.0"; return; }
+    echo "${DISPLAY:-:0.0}"
+}
+
+cursor_show() {
+    if [ ! -f "$PIDFILE" ]; then
+        return 0
+    fi
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    rm -f "$PIDFILE"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    for _ in 1 2 3 4 5; do
+        [ -z "$pid" ] && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+    done
+    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+}
+
+cursor_hide() {
+    if [ -f "$PIDFILE" ]; then
+        local pid
+        pid=$(cat "$PIDFILE" 2>/dev/null)
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+        rm -f "$PIDFILE"
+    fi
+    command -v unclutter >/dev/null 2>&1 || return 0
+    export DISPLAY
+    DISPLAY=$(pick_display)
+    unclutter -timeout 0 >/dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+}
+
+case "${1:-}" in
+    show) cursor_show ;;
+    hide) cursor_hide ;;
+    *)
+        echo "Usage: ${0##*/} show|hide" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,1007 @@
+#!/usr/bin/env python3
+# Map gamepad stick/d-pad to X mouse cursor for Fightcade lobby UI.
+# SELECT+X / SELECT+Y: FBNeo/SNES menu pause/resume (CRT + HD); Flycast menu cursor.
+# Pad keyboard leaks (Alt+Enter etc.) are blocked by fightcade-crt-block-pad-kbd.
+#
+# Usage:
+#   fightcade-pad-mouse daemon
+#   fightcade-pad-mouse stop|status|probe
+
+from __future__ import annotations
+
+import fcntl
+import glob
+import os
+import select
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+try:
+    from evdev import InputDevice
+
+    HAS_EVDEV = True
+except ImportError:
+    HAS_EVDEV = False
+
+PIDFILE = "/tmp/fightcade-pad-mouse.pid"
+LOCKFILE = "/tmp/fightcade-pad-mouse.lock"
+DISABLE = "/userdata/system/configs/fightcade-pad-mouse.disable"
+CONF = "/userdata/system/configs/fightcade-pad-mouse.conf"
+FBNEO_FLAG = "/tmp/fightcade-fbneo-crt-active"
+FLYCAST_GAME_FLAG = "/tmp/fightcade-flycast-game-active"
+CRT_PAUSEFILE = "/tmp/fightcade-switchres-wrap.pause"
+FLYCAST_PGREP_RE = r"flycast\.elf"
+FBNEO_PGREP_RE = r"fcadefbneo\.exe"
+SNES9X_PGREP_RE = r"fcadesnes9x\.exe"
+
+EV_KEY = 0x01
+EV_ABS = 0x03
+ABS_X = 0x00
+ABS_Y = 0x01
+ABS_HAT0X = 0x10
+ABS_HAT0Y = 0x11
+BTN_SOUTH = 0x130
+BTN_EAST = 0x131
+BTN_NORTH = 0x133
+BTN_WEST = 0x134
+BTN_TR = 0x137
+BTN_SELECT = 0x13A
+
+WRAP_SCRIPT = "/userdata/system/fightcade-flatpak/crt/fightcade-crt-switchres"
+CURSOR_CTL = "/userdata/system/fightcade-flatpak/input/fightcade-cursor"
+EVENT_STRUCT = struct.Struct("QQHHi")
+
+DEFAULTS = {
+    "deadzone": 8000,
+    "deadzone_8bit": 15,
+    "max_speed": 10,
+    "slow_speed": 2,
+    "poll_hz": 60,
+    "session_refresh_sec": 0.25,
+    "lobby_refresh_sec": 2.0,
+    "crt_combo_cooldown_sec": 1,
+    "device_match": "",
+}
+
+
+def log(msg: str) -> None:
+    if os.environ.get("FIGHTCADE_PAD_MOUSE_QUIET"):
+        return
+    sys.stderr.write(f"fightcade-pad-mouse: {msg}\n")
+
+
+def load_conf() -> dict:
+    cfg = dict(DEFAULTS)
+    if not os.path.isfile(CONF):
+        return cfg
+    try:
+        with open(CONF, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip().lower()
+                val = val.strip()
+                if key in cfg:
+                    if isinstance(cfg[key], bool):
+                        cfg[key] = val.lower() in ("1", "true", "yes", "on")
+                    elif isinstance(cfg[key], int):
+                        cfg[key] = int(val)
+                    elif isinstance(cfg[key], float):
+                        cfg[key] = float(val)
+                    else:
+                        cfg[key] = val
+    except (OSError, ValueError) as exc:
+        log(f"config parse warning: {exc}")
+    return cfg
+
+
+def pick_display() -> str:
+    if os.path.exists("/tmp/.X11-unix/X0"):
+        return ":0.0"
+    if os.path.exists("/tmp/.X11-unix/X1"):
+        return ":1.0"
+    return os.environ.get("DISPLAY", ":0.0")
+
+
+def pgrep_running(pattern: str) -> bool:
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", pattern],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        return out.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def scan_fightcade_processes() -> dict[str, bool]:
+    """One pgrep for all Fightcade-related processes (avoids 4x subprocess in lobby)."""
+    found = {
+        "fc": False,
+        "fbneo": False,
+        "snes9x": False,
+        "flycast": False,
+    }
+    try:
+        out = subprocess.run(
+            [
+                "pgrep",
+                "-af",
+                "fc2-electron|fcadefbneo|fcadesnes9x|flycast\\.elf",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return found
+        for line in out.stdout.splitlines():
+            if "fc2-electron" in line:
+                found["fc"] = True
+            if "fcadefbneo" in line:
+                found["fbneo"] = True
+            if "fcadesnes9x" in line:
+                found["snes9x"] = True
+            if "flycast.elf" in line:
+                found["flycast"] = True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return found
+
+
+def fightcade_running() -> bool:
+    return pgrep_running("fc2-electron")
+
+
+def fightcade_fbneo_running() -> bool:
+    return pgrep_running(FBNEO_PGREP_RE)
+
+
+def fightcade_snes9x_running() -> bool:
+    return pgrep_running(SNES9X_PGREP_RE)
+
+
+def fightcade_wine_menu_emu_running() -> bool:
+    return fightcade_fbneo_running() or fightcade_snes9x_running()
+
+
+def fightcade_fbneo_active() -> bool:
+    if not fightcade_wine_menu_emu_running():
+        if os.path.isfile(FBNEO_FLAG):
+            try:
+                os.remove(FBNEO_FLAG)
+            except OSError:
+                pass
+        return False
+    return os.path.isfile(FBNEO_FLAG)
+
+
+def wine_menu_emu_in_focus(focus_name: str) -> str | None:
+    focus = focus_name.lower()
+    if fightcade_fbneo_running() and "fbneo" in focus:
+        return "fbneo"
+    if fightcade_snes9x_running() and "snes9x" in focus:
+        return "snes9x"
+    return None
+
+
+def read_focused_window_name(display: str) -> str:
+    try:
+        out = subprocess.run(
+            ["xdotool", "getwindowfocus", "getwindowname"],
+            env={**os.environ, "DISPLAY": display},
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def fightcade_flycast_running() -> bool:
+    return pgrep_running(FLYCAST_PGREP_RE)
+
+
+def flycast_window_has_game(display: str) -> bool:
+    if not fightcade_flycast_running():
+        return False
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        wmctrl = subprocess.run(
+            ["wmctrl", "-l"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if wmctrl.returncode == 0:
+            for line in wmctrl.stdout.splitlines():
+                lower = line.lower()
+                if "flycast" not in lower:
+                    continue
+                if "no game loaded" in lower:
+                    return False
+                return True
+            return False
+
+        out = subprocess.run(
+            ["xdotool", "search", "--name", "flycast"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return False
+        for wid in out.stdout.split():
+            wid = wid.strip()
+            if not wid:
+                continue
+            title_out = subprocess.run(
+                ["xdotool", "getwindowname", wid],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            title = title_out.stdout.strip().lower()
+            if "no game loaded" in title:
+                return False
+            return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return False
+
+
+class SessionState:
+    """Cached Fightcade session flags; avoids pgrep/xdotool in the 60Hz input loop.
+
+    LOBBY FAST PATH (critical): While Fightcade lobby is open and no emulator is
+    running, refresh() must NOT call xdotool getwindowfocus, wmctrl, or
+    set_cursor_visible. Those contend with the 60Hz stick→xdotool mouse path and
+    make lobby navigation slow/jittery. Full focus polling is only for in-game CRT
+    combos (SELECT+X/Y, Flycast cursor). Do not "simplify" by always polling focus.
+    """
+
+    def __init__(self, refresh_sec: float = 0.25, lobby_refresh_sec: float = 2.0) -> None:
+        self.refresh_sec = refresh_sec
+        self.lobby_refresh_sec = lobby_refresh_sec
+        self.last_refresh = 0.0
+        self.last_lobby_refresh = 0.0
+        self.fc_running = False
+        self.fbneo_running = False
+        self.snes9x_running = False
+        self.fbneo_active = False
+        self.flycast_game_active = False
+        self.crt_paused = False
+        self.focus_name = ""
+        self.in_lobby = True
+
+    def _apply_process_scan(self, procs: dict[str, bool]) -> None:
+        self.fc_running = procs["fc"]
+        self.fbneo_running = procs["fbneo"]
+        self.snes9x_running = procs["snes9x"]
+
+    def refresh(self, display: str, force: bool = False) -> None:
+        now = time.monotonic()
+        self.crt_paused = crt_paused()
+
+        if not force and now - self.last_lobby_refresh < self.lobby_refresh_sec:
+            if self.in_lobby and not self.crt_paused:
+                return
+
+        procs = scan_fightcade_processes()
+        self._apply_process_scan(procs)
+        need_game_state = (
+            self.crt_paused
+            or procs["fbneo"]
+            or procs["snes9x"]
+            or procs["flycast"]
+            or os.path.isfile(FLYCAST_GAME_FLAG)
+            or os.path.isfile(FBNEO_FLAG)
+        )
+
+        if not need_game_state:
+            # Lobby only: pgrep at lobby_refresh_sec. No xdotool/wmctrl here.
+            self.last_lobby_refresh = now
+            self.in_lobby = True
+            self.fbneo_active = False
+            self.flycast_game_active = False
+            self.focus_name = ""
+            return
+
+        if not force and now - self.last_refresh < self.refresh_sec:
+            return
+        self.last_refresh = now
+        self.last_lobby_refresh = now
+        self.in_lobby = False
+
+        if self.fbneo_running or self.snes9x_running:
+            self.fbneo_active = fightcade_fbneo_active()
+        else:
+            self.fbneo_active = False
+        if os.path.isfile(FLYCAST_GAME_FLAG):
+            self.flycast_game_active = True
+        elif procs["flycast"]:
+            self.flycast_game_active = flycast_window_has_game(display)
+        else:
+            self.flycast_game_active = False
+            if os.path.isfile(FLYCAST_GAME_FLAG):
+                try:
+                    os.remove(FLYCAST_GAME_FLAG)
+                except OSError:
+                    pass
+        self.focus_name = read_focused_window_name(display)
+
+    def lobby_mouse_allowed(self, flycast_menu_cursor: bool) -> bool:
+        if self.crt_paused or flycast_menu_cursor:
+            return True
+        if wine_menu_emu_in_focus(self.focus_name):
+            return False
+        if self.flycast_game_active and "flycast" in self.focus_name.lower():
+            return False
+        return True
+
+    def wine_menu_emu_combo_available(self) -> bool:
+        return wine_menu_emu_in_focus(self.focus_name) is not None
+
+    def fbneo_combo_available(self) -> bool:
+        return self.wine_menu_emu_combo_available()
+
+    def flycast_combo_available(self) -> bool:
+        return self.flycast_game_active and "flycast" in self.focus_name.lower()
+
+
+class XdotoolClient:
+    """One long-lived helper; avoids fork/exec on every stick tick."""
+
+    def __init__(self, display: str) -> None:
+        self.display = display
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._start()
+
+    def _start(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        env = os.environ.copy()
+        env["DISPLAY"] = self.display
+        self._proc = subprocess.Popen(
+            [
+                "bash",
+                "-c",
+                "while read -r cmd a1 a2; do "
+                'case "$cmd" in '
+                "move) xdotool mousemove_relative -- \"$a1\" \"$a2\" ;; "
+                "down) xdotool mousedown 1 ;; "
+                "up) xdotool mouseup 1 ;; "
+                'key) xdotool key --clearmodifiers "$a1" ;; '
+                "esac; done",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            bufsize=0,
+        )
+
+    def _send(self, line: str) -> None:
+        try:
+            self._start()
+            assert self._proc is not None and self._proc.stdin is not None
+            self._proc.stdin.write(f"{line}\n".encode())
+            self._proc.stdin.flush()
+        except (BrokenPipeError, OSError, AssertionError):
+            self._proc = None
+            self._start()
+            try:
+                assert self._proc is not None and self._proc.stdin is not None
+                self._proc.stdin.write(f"{line}\n".encode())
+                self._proc.stdin.flush()
+            except (BrokenPipeError, OSError, AssertionError):
+                pass
+
+    def move(self, dx: int, dy: int) -> None:
+        if dx == 0 and dy == 0:
+            return
+        self._send(f"move {dx} {dy}")
+
+    def mouse_down(self) -> None:
+        self._send("down")
+
+    def mouse_up(self) -> None:
+        self._send("up")
+
+    def key(self, combo: str) -> None:
+        self._send(f"key {combo}")
+
+    def close(self) -> None:
+        if self._proc is None:
+            return
+        try:
+            if self._proc.stdin:
+                self._proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            self._proc.terminate()
+        except OSError:
+            pass
+        self._proc = None
+
+
+def crt_paused() -> bool:
+    try:
+        with open(CRT_PAUSEFILE, encoding="utf-8") as fh:
+            return fh.read().strip() == "1"
+    except OSError:
+        return False
+
+
+def list_gamepad_event_nodes(device_match: str) -> list[tuple[str, str]]:
+    pads: list[tuple[str, str]] = []
+    for js_path in sorted(glob.glob("/dev/input/by-id/*-joystick")):
+        if js_path.endswith("-event-joystick"):
+            continue
+        if not os.path.exists(js_path):
+            continue
+        label = os.path.basename(js_path).removesuffix("-joystick")
+        if "Motion" in label:
+            continue
+        event_path = js_path.replace("-joystick", "-event-joystick")
+        if not os.path.exists(event_path):
+            continue
+        if device_match and device_match.lower() not in label.lower():
+            continue
+        pads.append((label, event_path))
+    return pads
+
+
+def trigger_crt_esc_pause() -> None:
+    if not os.path.isfile(WRAP_SCRIPT):
+        return
+    try:
+        subprocess.run(
+            [WRAP_SCRIPT, "crt-pause"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def trigger_crt_resume() -> None:
+    if not os.path.isfile(WRAP_SCRIPT):
+        return
+    try:
+        subprocess.run(
+            [WRAP_SCRIPT, "crt-resume"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def load_pad_axis_caps(event_path: str) -> dict[int, tuple[int, int, int]]:
+    """Return ABS code -> (min, max, flat) from the device."""
+    defaults = {
+        ABS_X: (-32768, 32767, 0),
+        ABS_Y: (-32768, 32767, 0),
+        ABS_HAT0X: (-1, 1, 0),
+        ABS_HAT0Y: (-1, 1, 0),
+    }
+    if not HAS_EVDEV:
+        return defaults
+    caps: dict[int, tuple[int, int, int]] = {}
+    try:
+        dev = InputDevice(event_path)
+        for code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+            try:
+                ai = dev.absinfo(code)
+            except (OSError, TypeError):
+                continue
+            caps[code] = (ai.min, ai.max, ai.flat)
+        dev.close()
+    except OSError as exc:
+        log(f"axis caps read failed {event_path}: {exc}")
+    for code, fallback in defaults.items():
+        caps.setdefault(code, fallback)
+    return caps
+
+
+def axis_to_float(
+    value: int,
+    min_v: int,
+    max_v: int,
+    flat: int,
+    deadzone_16bit: int,
+    deadzone_8bit: int,
+) -> float:
+    center = (min_v + max_v) / 2.0
+    half_span = max(max_v - center, center - min_v)
+    if half_span <= 0:
+        return 0.0
+    if max_v <= 255:
+        dz = float(deadzone_8bit if deadzone_8bit > 0 else max(flat, 15))
+    else:
+        dz = float(deadzone_16bit)
+    delta = value - center
+    if abs(delta) <= dz:
+        return 0.0
+    usable = half_span - dz
+    if usable <= 0:
+        return 0.0
+    sign = 1 if delta > 0 else -1
+    mag = (abs(delta) - dz) / usable
+    return sign * min(1.0, mag)
+
+
+def apply_deadzone(value: int, deadzone: int) -> float:
+    if abs(value) <= deadzone:
+        return 0.0
+    span = 32767 - deadzone
+    if span <= 0:
+        return 0.0
+    sign = 1 if value > 0 else -1
+    mag = (abs(value) - deadzone) / span
+    return sign * min(1.0, mag)
+
+
+def hat_to_step(value: int) -> int:
+    if value == 0:
+        return 0
+    return 1 if value > 0 else -1
+
+
+def move_mouse(dx: int, dy: int, xdotool: XdotoolClient) -> None:
+    xdotool.move(dx, dy)
+
+
+def set_mouse_button(down: bool, xdotool: XdotoolClient) -> None:
+    if down:
+        xdotool.mouse_down()
+    else:
+        xdotool.mouse_up()
+
+
+def send_alt_tab(xdotool: XdotoolClient) -> None:
+    xdotool.key("alt+Tab")
+
+
+def set_cursor_visible(visible: bool, display: str) -> None:
+    if not os.path.isfile(CURSOR_CTL) or not os.access(CURSOR_CTL, os.X_OK):
+        return
+    cmd = "show" if visible else "hide"
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    try:
+        subprocess.run(
+            [CURSOR_CTL, cmd],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def drain_evdev(
+    fd: int,
+    axes: dict[int, int],
+    keys: dict[int, int],
+) -> bool:
+    moved = False
+    while True:
+        try:
+            data = os.read(fd, EVENT_STRUCT.size)
+        except BlockingIOError:
+            return moved
+        if len(data) < EVENT_STRUCT.size:
+            return moved
+        _sec, _usec, ev_type, code, value = EVENT_STRUCT.unpack(data)
+        if ev_type == EV_KEY:
+            keys[code] = value
+        elif ev_type == EV_ABS and code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+            if axes.get(code, 0) != value:
+                moved = True
+            axes[code] = value
+    return moved
+
+
+def key_down(keys: dict[int, int], code: int) -> bool:
+    return keys.get(code, 0) == 1
+
+
+def pick_active_pad(
+    pads: list[tuple[str, str]],
+    activity: dict[str, float],
+) -> str:
+    if len(pads) == 1:
+        return pads[0][1]
+    if not activity:
+        return pads[0][1]
+    return max(activity, key=activity.get)
+
+
+def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
+    display = pick_display()
+    deadzone = int(cfg["deadzone"])
+    deadzone_8bit = int(cfg.get("deadzone_8bit", DEFAULTS["deadzone_8bit"]))
+    max_speed = float(cfg["max_speed"])
+    slow_speed = float(cfg.get("slow_speed", DEFAULTS["slow_speed"]))
+    poll_hz = max(20, int(cfg["poll_hz"]))
+    poll_sec = 1.0 / poll_hz
+    refresh_sec = float(cfg.get("session_refresh_sec", DEFAULTS["session_refresh_sec"]))
+    lobby_refresh_sec = float(
+        cfg.get("lobby_refresh_sec", DEFAULTS["lobby_refresh_sec"])
+    )
+    combo_cooldown = max(1, int(cfg["crt_combo_cooldown_sec"]))
+    session = SessionState(
+        refresh_sec=refresh_sec, lobby_refresh_sec=lobby_refresh_sec
+    )
+    xdotool = XdotoolClient(display)
+
+    event_fds: dict[int, str] = {}
+    axes_by_pad: dict[str, dict[int, int]] = {}
+    axis_caps_by_pad: dict[str, dict[int, tuple[int, int, int]]] = {}
+    key_state: dict[int, int] = {}
+    pad_activity: dict[str, float] = {}
+
+    labels = ", ".join(p[0] for p in pads)
+    log(f"gamepads: {labels} on DISPLAY={display} (SELECT+X pause, SELECT+Y resume)")
+    set_cursor_visible(True, display)
+
+    try:
+        for _label, event_path in pads:
+            event_fds[os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)] = event_path
+            axis_caps_by_pad[event_path] = load_pad_axis_caps(event_path)
+            axes_by_pad[event_path] = {
+                ABS_X: 0,
+                ABS_Y: 0,
+                ABS_HAT0X: 0,
+                ABS_HAT0Y: 0,
+            }
+    except OSError as exc:
+        log(f"open input device failed: {exc}")
+        return
+
+    mouse_held = False
+    pause_combo_was_active = False
+    resume_combo_was_active = False
+    tab_combo_was_active = False
+    last_pause_at = 0.0
+    last_resume_at = 0.0
+    last_tab_at = 0.0
+    cursor_visible = True
+    flycast_menu_cursor = False
+    select_was_down = False
+    all_fds = list(event_fds.keys())
+
+    try:
+        while True:
+            session.refresh(display)
+            if os.path.isfile(DISABLE) or not session.fc_running:
+                if mouse_held:
+                    set_mouse_button(False, xdotool)
+                    mouse_held = False
+                if not cursor_visible:
+                    set_cursor_visible(True, display)
+                    cursor_visible = True
+                flycast_menu_cursor = False
+                time.sleep(0.5)
+                continue
+
+            if not session.flycast_game_active:
+                flycast_menu_cursor = False
+
+            if session.in_lobby:
+                # Skip cursor hide/show and focus checks; lobby mouse is always on.
+                allow_mouse = True
+                allow_click = True
+            else:
+                allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                allow_click = allow_mouse
+                want_cursor = allow_mouse
+                if want_cursor != cursor_visible:
+                    set_cursor_visible(want_cursor, display)
+                    cursor_visible = want_cursor
+
+            _r, _, _ = select.select(all_fds, [], [], poll_sec)
+            for fd in _r:
+                event_path = event_fds[fd]
+                axes = axes_by_pad[event_path]
+                if drain_evdev(fd, axes, key_state):
+                    pad_activity[event_path] = time.time()
+
+            select_down = key_down(key_state, BTN_SELECT)
+            south_down = key_down(key_state, BTN_SOUTH)
+            if allow_click:
+                if south_down and not select_down and not mouse_held:
+                    set_mouse_button(True, xdotool)
+                    mouse_held = True
+                elif (not south_down or select_down) and mouse_held:
+                    set_mouse_button(False, xdotool)
+                    mouse_held = False
+            elif mouse_held:
+                set_mouse_button(False, xdotool)
+                mouse_held = False
+
+            now = time.time()
+            pause_active = select_down and key_down(key_state, BTN_WEST)
+            if (
+                pause_active
+                and not pause_combo_was_active
+                and now - last_pause_at >= combo_cooldown
+            ):
+                if session.fbneo_combo_available():
+                    trigger_crt_esc_pause()
+                    last_pause_at = now
+                    set_cursor_visible(True, display)
+                    cursor_visible = True
+                    log("SELECT+X triggered CRT pause (ESC)")
+                elif session.flycast_combo_available():
+                    flycast_menu_cursor = True
+                    last_pause_at = now
+                    set_cursor_visible(True, display)
+                    cursor_visible = True
+                    log("SELECT+X Flycast menu cursor on")
+            pause_combo_was_active = pause_active
+
+            resume_active = select_down and key_down(key_state, BTN_NORTH)
+            if (
+                resume_active
+                and not resume_combo_was_active
+                and now - last_resume_at >= combo_cooldown
+            ):
+                if session.fbneo_combo_available():
+                    trigger_crt_resume()
+                    last_resume_at = now
+                    set_cursor_visible(False, display)
+                    cursor_visible = False
+                    log("SELECT+Y triggered CRT resume")
+                elif session.flycast_combo_available():
+                    flycast_menu_cursor = False
+                    last_resume_at = now
+                    set_cursor_visible(False, display)
+                    cursor_visible = False
+                    log("SELECT+Y Flycast menu cursor off")
+            resume_combo_was_active = resume_active
+
+            if (
+                session.flycast_combo_available()
+                and select_down
+                and not select_was_down
+                and not key_down(key_state, BTN_WEST)
+                and not key_down(key_state, BTN_NORTH)
+                and not key_down(key_state, BTN_TR)
+            ):
+                flycast_menu_cursor = True
+                set_cursor_visible(True, display)
+                cursor_visible = True
+            select_was_down = select_down
+
+            tab_active = select_down and key_down(key_state, BTN_TR)
+            if (
+                allow_mouse
+                and tab_active
+                and not tab_combo_was_active
+                and now - last_tab_at >= combo_cooldown
+            ):
+                send_alt_tab(xdotool)
+                last_tab_at = now
+                log("SELECT+R1 sent Alt+Tab")
+            tab_combo_was_active = tab_active
+
+            if allow_mouse:
+                event_path = pick_active_pad(pads, pad_activity)
+                axes = axes_by_pad[event_path]
+                caps = axis_caps_by_pad[event_path]
+                x_min, x_max, x_flat = caps.get(ABS_X, (-32768, 32767, 0))
+                y_min, y_max, y_flat = caps.get(ABS_Y, (-32768, 32767, 0))
+                nx = axis_to_float(
+                    axes.get(ABS_X, 0), x_min, x_max, x_flat, deadzone, deadzone_8bit
+                )
+                ny = axis_to_float(
+                    axes.get(ABS_Y, 0), y_min, y_max, y_flat, deadzone, deadzone_8bit
+                )
+                fine_nudge = key_down(key_state, BTN_EAST)
+                move_speed = slow_speed if fine_nudge else max_speed
+                dx = int(round(nx * move_speed))
+                dy = int(round(ny * move_speed))
+                hx = hat_to_step(axes.get(ABS_HAT0X, 0))
+                hy = hat_to_step(axes.get(ABS_HAT0Y, 0))
+                step = int(round(move_speed))
+                if hx:
+                    dx += hx * step
+                if hy:
+                    dy += hy * step
+                move_mouse(dx, dy, xdotool)
+    finally:
+        if mouse_held:
+            set_mouse_button(False, xdotool)
+        xdotool.close()
+        for fd in all_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def cmd_probe(device_match: str) -> int:
+    pads = list_gamepad_event_nodes(device_match)
+    if not pads:
+        print("no gamepads found")
+        return 1
+    for label, event_path in pads:
+        print(f"{label}: event={event_path}")
+    print("Press buttons for 15s (Ctrl+C to stop early)...")
+    fd = os.open(pads[0][1], os.O_RDONLY)
+    end = time.time() + 15
+    keys: dict[int, int] = {}
+    axes: dict[int, int] = {}
+    try:
+        while time.time() < end:
+            _r, _, _ = select.select([fd], [], [], 0.2)
+            if _r:
+                drain_evdev(fd, axes, keys)
+            moved = []
+            for code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+                if code in axes:
+                    moved.append(f"{code}={axes[code]}")
+            if moved:
+                print("  " + " ".join(moved))
+            for code, val in sorted(keys.items()):
+                if val:
+                    name = {
+                        BTN_SOUTH: "BTN_SOUTH(A)",
+                        BTN_EAST: "BTN_EAST(B)",
+                        BTN_WEST: "BTN_WEST(X)",
+                        BTN_NORTH: "BTN_NORTH(Y)",
+                        BTN_TR: "BTN_TR(R1)",
+                        BTN_SELECT: "BTN_SELECT",
+                    }.get(code, f"code_{code}")
+                    print(f"  {name} ({code}) = {val}")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        os.close(fd)
+    return 0
+
+
+def daemon_start() -> int:
+    if os.path.isfile(DISABLE):
+        log("disabled via fightcade-pad-mouse.disable")
+        return 0
+
+    lock_fd = os.open(LOCKFILE, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+
+    if os.path.isfile(PIDFILE):
+        try:
+            with open(PIDFILE, encoding="utf-8") as fh:
+                old = int(fh.read().strip())
+            os.kill(old, 0)
+            return 0
+        except (OSError, ValueError):
+            pass
+
+    cfg = load_conf()
+    pairs = list_gamepad_event_nodes(str(cfg.get("device_match", "")))
+    if not pairs:
+        log("no gamepad found (check USB; optional device_match in fightcade-pad-mouse.conf)")
+        return 0
+
+    pid = os.fork()
+    if pid > 0:
+        return 0
+    os.setsid()
+    pid2 = os.fork()
+    if pid2 > 0:
+        os._exit(0)
+
+    with open(PIDFILE, "w", encoding="utf-8") as fh:
+        fh.write(str(os.getpid()))
+
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+
+    try:
+        run_loop(pairs, cfg)
+    finally:
+        try:
+            os.remove(PIDFILE)
+        except OSError:
+            pass
+
+
+def daemon_stop() -> None:
+    if not os.path.isfile(PIDFILE):
+        return
+    try:
+        with open(PIDFILE, encoding="utf-8") as fh:
+            pid = int(fh.read().strip())
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.1)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    except (OSError, ValueError):
+        pass
+    for path in (PIDFILE, LOCKFILE):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def cmd_status() -> None:
+    if os.path.isfile(DISABLE):
+        print("disabled")
+    if os.path.isfile(PIDFILE):
+        with open(PIDFILE, encoding="utf-8") as fh:
+            print(f"running pid {fh.read().strip()}")
+    else:
+        print("not running")
+    if os.path.isfile(FBNEO_FLAG):
+        print("wine emu crt session: active (fbneo/snes9x)")
+    if os.path.isfile(FLYCAST_GAME_FLAG):
+        print("flycast game session: active")
+    cfg = load_conf()
+    pairs = list_gamepad_event_nodes(str(cfg.get("device_match", "")))
+    if pairs:
+        for label, event_path in pairs:
+            print(f"  {label}: event={event_path}")
+    else:
+        print("gamepads: none")
+
+
+def main() -> int:
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "daemon":
+        return daemon_start()
+    if cmd == "stop":
+        daemon_stop()
+        return 0
+    if cmd == "status":
+        cmd_status()
+        return 0
+    if cmd == "probe":
+        cfg = load_conf()
+        return cmd_probe(str(cfg.get("device_match", "")))
+    sys.stderr.write("Usage: fightcade-pad-mouse daemon|stop|status|probe\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

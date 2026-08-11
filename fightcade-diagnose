@@ -7,6 +7,8 @@ set -eu
 
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
+CRT_DIR="${PROJECT_DIR}/crt"
+INPUT_DIR="${PROJECT_DIR}/input"
 SCRIPTS_DIR="/userdata/system/scripts"
 FLATPAK_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
 ROMS_ROOT="${FLATPAK_DATA}/ROMs"
@@ -50,8 +52,34 @@ fi
 head_section "Installed scripts"
 # ---------------------------------------------------------------------------
 
-for f in fightcade-roms-sync fightcade-game-hook fightcade-crt-watch fightcade-diagnose uninstall.sh install.sh; do
+for f in fightcade-roms-sync fightcade-game-hook fightcade-diagnose uninstall.sh install.sh; do
     path="${PROJECT_DIR}/${f}"
+    if [ -x "$path" ]; then
+        pass "${path}"
+    elif [ -f "$path" ]; then
+        fail "${path} (not executable)"
+        any_fail=1
+    else
+        fail "${path} (missing)"
+        any_fail=1
+    fi
+done
+
+for f in fightcade-pad-mouse fightcade-cursor; do
+    path="${INPUT_DIR}/${f}"
+    if [ -x "$path" ]; then
+        pass "${path}"
+    elif [ -f "$path" ]; then
+        fail "${path} (not executable)"
+        any_fail=1
+    else
+        fail "${path} (missing)"
+        any_fail=1
+    fi
+done
+
+for f in fightcade-crt-switchres fightcade-crt-hostd fightcade-crt-recover fightcade-crt-block-pad-kbd; do
+    path="${CRT_DIR}/${f}"
     if [ -x "$path" ]; then
         pass "${path}"
     elif [ -f "$path" ]; then
@@ -180,22 +208,31 @@ head_section "Artwork / gamelist"
 
 FLATPAK_ROMS_DIR="/userdata/roms/flatpak"
 
-if [ -f "${FLATPAK_ROMS_DIR}/images/Fightcade-image.png" ]; then
-    pass "artwork: images/Fightcade-image.png"
-else
-    fail "artwork missing: ${FLATPAK_ROMS_DIR}/images/Fightcade-image.png"
-    any_fail=1
-fi
+for art in Fightcade.png Fightcade-logo.png Fightcade-thumb.png; do
+    if [ -f "${FLATPAK_ROMS_DIR}/images/${art}" ]; then
+        pass "artwork: images/${art}"
+    else
+        fail "artwork missing: ${FLATPAK_ROMS_DIR}/images/${art}"
+        any_fail=1
+    fi
+done
 
-if [ -f "${FLATPAK_ROMS_DIR}/images/Fightcade.png" ]; then
-    pass "icon: images/Fightcade.png (from batocera-flatpak-update)"
-else
-    info "icon images/Fightcade.png not found (created by batocera-flatpak-update)"
+legacy_art="${FLATPAK_ROMS_DIR}/images/Fightcade-image.png"
+if [ -f "$legacy_art" ]; then
+    info "legacy artwork present: images/Fightcade-image.png (re-run install.sh to replace with Fightcade-thumb.png)"
 fi
 
 if [ -f "${FLATPAK_ROMS_DIR}/gamelist.xml" ]; then
     if grep -q '<path>\./Fightcade\.flatpak</path>' "${FLATPAK_ROMS_DIR}/gamelist.xml"; then
         pass "gamelist.xml has Fightcade entry"
+        if grep -q '<image>\./images/Fightcade\.png</image>' "${FLATPAK_ROMS_DIR}/gamelist.xml" \
+            && grep -q '<marquee>\./images/Fightcade-logo\.png</marquee>' "${FLATPAK_ROMS_DIR}/gamelist.xml" \
+            && grep -q '<thumbnail>\./images/Fightcade-thumb\.png</thumbnail>' "${FLATPAK_ROMS_DIR}/gamelist.xml"; then
+            pass "gamelist.xml Fightcade artwork paths (logo / marquee / thumbnail)"
+        else
+            fail "gamelist.xml Fightcade entry has outdated artwork paths (re-run install.sh)"
+            any_fail=1
+        fi
     else
         fail "gamelist.xml exists but has no Fightcade entry"
         any_fail=1
@@ -205,8 +242,18 @@ else
     any_fail=1
 fi
 
+if pgrep -f 'fightcade-pad-mouse' >/dev/null 2>&1 || [ -f /tmp/fightcade-pad-mouse.pid ]; then
+    pass "pad-mouse daemon running"
+else
+    info "pad-mouse not running (starts on Fightcade gameStart)"
+fi
+
+if [ -f /userdata/system/configs/fightcade-pad-mouse.disable ]; then
+    info "pad-mouse disabled via fightcade-pad-mouse.disable"
+fi
+
 # ---------------------------------------------------------------------------
-head_section "CRT / Switchres"
+head_section "CRT / Switchres (BUA xdg-open model)"
 # ---------------------------------------------------------------------------
 
 if command -v wmctrl >/dev/null 2>&1; then
@@ -214,13 +261,63 @@ if command -v wmctrl >/dev/null 2>&1; then
 elif command -v xdotool >/dev/null 2>&1; then
     pass "xdotool present (window-exit detection enabled)"
 else
-    info "wmctrl/xdotool not installed; CRT watcher relies on process detection only"
+    info "wmctrl/xdotool not installed; wrapper relies on process detection only"
 fi
 
 if [ -x /usr/bin/switchres ]; then
     pass "switchres binary present"
 else
     info "switchres not present; CRT switching not available on this build"
+fi
+
+wrap="${CRT_DIR}/fightcade-crt-switchres"
+if [ -x "$wrap" ]; then
+    pass "Switchres wrapper installed: ${wrap}"
+else
+    fail "Switchres wrapper missing: ${wrap}"
+    any_fail=1
+fi
+
+deploy=$(flatpak info --system --show-location "${APP_ID}" 2>/dev/null || true)
+if [ -n "$deploy" ]; then
+    xdg_open="${deploy}/files/bin/xdg-open"
+    backup="${xdg_open}.fc-original"
+    if [ -f "$backup" ] && grep -q 'play.pending' "$xdg_open" 2>/dev/null \
+        && grep -q 'fcade-quark' "$xdg_open" 2>/dev/null; then
+        pass "Flatpak xdg-open patched (play.pending + fcade-quark)"
+    elif [ -f "$backup" ]; then
+        fail "Flatpak xdg-open backup exists but xdg-open is not patched (re-run install.sh)"
+        any_fail=1
+    else
+        fail "Flatpak xdg-open not patched (re-run install.sh)"
+        any_fail=1
+    fi
+
+hostd="${CRT_DIR}/fightcade-crt-hostd"
+if [ -x "$hostd" ]; then
+    pass "CRT host watcher installed: ${hostd}"
+else
+    fail "CRT host watcher missing: ${hostd}"
+    any_fail=1
+fi
+
+if pgrep -f 'fightcade-crt-hostd daemon' >/dev/null 2>&1; then
+    pass "CRT host watcher is running"
+elif flatpak ps 2>/dev/null | grep -q com.fightcade.Fightcade; then
+    info "Fightcade is open but CRT host watcher is not running (relaunch Fightcade from ES)"
+fi
+else
+    fail "Could not read Flatpak deploy path for xdg-open check"
+    any_fail=1
+fi
+
+if pgrep -f 'fightcade-crt-watch' >/dev/null 2>&1; then
+    fail "legacy fightcade-crt-watch daemon still running (re-run install.sh)"
+    any_fail=1
+fi
+
+if pgrep -f 'fightcade-crt-switchres' >/dev/null 2>&1; then
+    info "Switchres wrapper active (game session in progress)"
 fi
 
 dm=$(batocera-resolution getDisplayMode 2>/dev/null || echo "unknown")
@@ -234,7 +331,7 @@ elif [ -f /userdata/system/configs/fightcade-switchres.force ]; then
 else
     w="${res%%x*}"
     case "$w" in
-        *[!0-9]*|'') info "cannot determine width; watcher will decide at launch" ;;
+        *[!0-9]*|'') info "cannot determine width; wrapper will decide at launch" ;;
         *)
             if [ "$dm" = "xorg" ] && [ "$w" -lt 1024 ]; then
                 info "Switchres will engage on game launch (xorg, width < 1024)"
@@ -245,15 +342,15 @@ else
     esac
 fi
 
-if [ -f /tmp/fightcade-crt-watch.pid ] && kill -0 "$(cat /tmp/fightcade-crt-watch.pid 2>/dev/null)" 2>/dev/null; then
-    info "CRT watcher is currently running (pid $(cat /tmp/fightcade-crt-watch.pid))"
+if [ -f /tmp/fightcade-crt-watch.pid ]; then
+    info "stale legacy pid file present (safe to remove after install.sh)"
 fi
 
 for cfg in "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" \
            "${FLATPAK_DATA}/config/snes9x/fcadesnes9x.conf" \
            "${FLATPAK_DATA}/config/flycast/emu.cfg"; do
     if [ -f "${cfg}.bak.switchres" ]; then
-        fail "leftover Switchres backup: ${cfg}.bak.switchres (run fightcade-crt-watch stop)"
+        fail "leftover Switchres backup: ${cfg}.bak.switchres (run crt/fightcade-crt-recover)"
         any_fail=1
     fi
 done

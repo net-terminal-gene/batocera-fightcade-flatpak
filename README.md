@@ -1,16 +1,34 @@
 <p align="center">
   <img src="images/batocera-logo.png" alt="Batocera" width="180">
   &nbsp;&nbsp;&nbsp;
-  <img src="images/fightcade-logo.png" alt="Fightcade" width="180">
+  <img src="images/Fightcade.png" alt="Fightcade" width="180">
 </p>
 
 <h1 align="center">Fightcade Flatpak for Batocera</h1>
 
-ROM path wiring and CRT Switchres support for Flatpak Fightcade on Batocera. One
-command wires your existing `/userdata/roms` folders into the Fightcade Flatpak
-data tree so games you already have show up without duplication. On CRT setups,
-Switchres switches the display to each game's native resolution during gameplay;
-the Fightcade lobby stays at your CRT menu timing (e.g. 640x480i).
+ROM path wiring for Flatpak Fightcade on Batocera. One command links your
+existing `/userdata/roms` folders into the Fightcade Flatpak data tree so games
+you already have show up without duplication.
+
+## Contents
+
+#### Quick Install & Setup
+- [Install](#install)
+- [ROM format and BIOS](#rom-format--bios-requirements)
+- [ROM path mapping](#rom-path-mapping)
+
+#### Advanced
+- [Controls and Navigation](#controls--navigation)
+  - [Game controller mapping](#game-controller-mapping)
+  - [Keyboard shortcuts (HD)](#keyboard-shortcuts-hd)
+- [Commands](#commands)
+- [Re-running the installer](#re-running-the-installer)
+- [CRT / Switchres support](docs/CRT.md)
+  - [Controls and navigation](docs/CRT.md#controls--navigation)
+    - [Game controller mapping](docs/CRT.md#game-controller-mapping)
+  - [Switchres flags](docs/CRT.md#switchres-flags)
+  - [Recovery](docs/CRT.md#recovery)
+  - [After a Fightcade Flatpak update](docs/CRT.md#after-a-fightcade-flatpak-update)
 
 ## Install
 
@@ -29,8 +47,11 @@ The installer:
 3. Creates the Fightcade ROMs scaffold and links your `/userdata/roms` folders into it.
 4. Drops a `_fightcade.txt` note (same style as Batocera's `_info.txt`) into each linked
    `/userdata/roms/<system>` folder describing Fightcade's ROM format and BIOS requirements.
-5. Installs CRT Switchres support: on xorg CRT setups, games launched from Fightcade
-   switch the display to their native resolution using your configured monitor profile.
+5. Installs controller settings for gamepad navigation in the lobby and in-game menus
+   (see [Controls & Navigation](#controls--navigation)).
+6. Installs CRT / Switchres support on xorg CRT setups (see [CRT / Switchres support](docs/CRT.md)).
+7. Installs Ports artwork under `/userdata/roms/flatpak/images/` (`Fightcade.png` logo,
+   `Fightcade-logo.png` marquee, `Fightcade-thumb.png` thumbnail) and wires `gamelist.xml`.
 
 ## ROM Format & BIOS Requirements
 
@@ -92,53 +113,66 @@ files into the Flatpak data directory by hand (except Dreamcast BIOS, above).
 
 When a source directory does not exist, an empty real directory is created instead.
 
-Links always target `/userdata/roms/...`, the same paths EmulationStation and Batocera
-use. This does not change [Storage Manager](https://wiki.batocera.org/storage_manager)
-setup, mount points, or where your ROMs physically live. If your library is on a
-secondary drive merged into `/userdata/roms` via Storage Manager, the symlinks still
-work: Fightcade reads through the unified path, not a copy on internal storage.
+> [!TIP]
+> Links always target `/userdata/roms/...`, the same paths EmulationStation and Batocera
+> use. This does not change [Storage Manager](https://wiki.batocera.org/storage_manager)
+> setup, mount points, or where your ROMs physically live. If your library is on a
+> secondary drive merged into `/userdata/roms` via Storage Manager, the symlinks still
+> work: Fightcade reads through the unified path, not a copy on internal storage.
 
-## CRT / Switchres support
+## Controls & Navigation
 
-On CRT setups the installer gives Fightcade native-resolution switching during
-gameplay, matching how Batocera's own emulators behave on a CRT. The Fightcade
-lobby, queues, and settings run at your CRT menu timing (e.g. 640x480i from
-EmulationStation or Advanced Game Settings), not at each game's native arcade
-modeline. Switchres only changes the display when you start a game (TEST GAME,
-online match, or training), applying the game's native modeline from your
-`batocera.conf` `monitor=` profile, then restores menu timing when the game exits.
+> Fightcade is designed to be used with a **keyboard and mouse**, especially for
+> **chat**. This installer adds **gamepad navigation** so you can move the cursor
+> and open menus without a mouse. **Chat still requires a keyboard.**
 
-Switchres engages only when the display mode is `xorg` and the current width is below
-1024 (i.e. a CRT menu resolution).
+### Game controller mapping
 
-**In-game menu hotkeys (CRT only, while a game is running):**
+**Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
+= emulator menu bar visible. **Flycast menu** = in-game overlay with cursor visible.
 
-Low-resolution games make the FBNeo in-game menu hard to use at native Switchres timing.
-These shortcuts only apply during gameplay, not in the Fightcade UI:
+| Where you are | Left Analog/D-pad | Left Analog/D-pad + B | A | SELECT + X | SELECT + Y | SELECT + R1 |
+|---------------|---------------|-----------|---|------------|------------|-------------|
+| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **FBNeo playing** | — | — | — | Open FBNeo menu (ESC) | — | — |
+| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **SNES playing** | — | — | — | Open Snes9x menu (ESC) | — | — |
+| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **Flycast playing** | — | — | — | Open Menu | Resume game | — |
+| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Open Menu | Resume game | — |
 
-| Key | Action |
-|-----|--------|
-| **ESC** | Pause Switchres and restore the Batocera menu resolution (e.g. 640x480) so you can use the in-game menu, assign controls, or turn off scanlines |
-| **Alt+Enter** | Resume Switchres and return to the game's native modeline |
+### Keyboard shortcuts (HD)
 
-When you exit the game normally (Game → Exit Game), Switchres still restores automatically.
+Three separate layers: **Fightcade** (the client), **this installer** (extra
+menu keys for FBNeo / Snes9x), and **emulator defaults** (in-game play). Remap
+in-game keys with **F5**.
+
+| Key | Layer | Action |
+|-----|-------|--------|
+| **Alt+Enter** | Fightcade | Windowed / fullscreen |
+| **Esc** | Fightcade | Quit game, return to channel |
+| **Backspace** | Fightcade | Network ping during a match |
+| **F5** | Fightcade | Input configuration |
+| **ESC** | Installer | Open FBNeo / Snes9x menu (not the same as Fightcade **Esc**) |
+| **Alt+Delete** | Installer | Close menu, return to fullscreen |
+| **Alt+Enter** | Installer | Dismiss menu bar after Alt+Delete |
+| **5** / **Shift** / Numpad **+** | Emulator | Coin / credit |
+| **1** / **Enter** | Emulator | Player 1 start |
+| **Arrows** / **W A S D** | Emulator | Movement |
+| **U I O P** / Numpad | Emulator | Action buttons (varies by game) |
+
+FBNeo and Snes9x quirk: Alt+Delete can return to fullscreen while the menu bar
+stays visible until Alt+Enter. Gamepad **SELECT + Y** sends Alt+Delete and
+Alt+Enter for you.
 
 ## Commands
 
-All scripts live in `/userdata/system/fightcade-flatpak/`.
-
 | Command | What it does |
 |---------|--------------|
-| `fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks (new arcade `.zip` files, console dirs, etc.) |
-| `fightcade-diagnose` | Print install state, link health, and CRT status |
-| `fightcade-crt-watch stop` | Stop the CRT watcher and restore configs/display (recovery after a stuck Switchres state) |
-| `fightcade-crt-watch daemon` | Start the CRT watcher manually (only needed if you ran `stop` while Fightcade is still open; otherwise relaunch Fightcade from ES) |
-| `uninstall.sh` | Remove links, hook, overrides, and scripts (ROMs and Flatpak untouched) |
+| `fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks |
+| `fightcade-diagnose` | Print install state, link health, and artwork / patch status |
+| `uninstall.sh` | Remove links, hook, overrides, xdg-open patch, and scripts (ROMs and Flatpak untouched) |
 | `uninstall.sh --uninstall-flatpak` | Also uninstall the Fightcade Flatpak |
-
-Advanced: optional `fightcade-switchres.disable` and `fightcade-switchres.force` files
-under `/userdata/system/configs/` permanently opt out of Switchres or force it on;
-`fightcade-diagnose` reports whether either flag is set.
 
 ## Re-running the installer
 
