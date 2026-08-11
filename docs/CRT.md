@@ -10,9 +10,9 @@ gameplay, matching how Batocera's own emulators behave on a CRT. The Fightcade
 lobby, queues, and settings run at your CRT menu timing (e.g. 640x480i from
 EmulationStation or Advanced Game Settings).
 
-Switchres only changes the display when you start a game (TEST GAME,
-ONLINE MATCH, TRAINING or REPLAY), applies that game's native resolution and refresh
-rate, then restores menu timing when the game exits.
+Switchres only changes the display when you start a game (**TEST GAME**, **TRAINING**,
+**ONLINE MATCH**, **REPLAY**, or **LIVE SPECTATING**), applies that game's native
+resolution and refresh rate, then restores menu timing when the session ends.
 
 ## Contents
 
@@ -20,6 +20,7 @@ rate, then restores menu timing when the game exits.
   - [Game controller mapping](#game-controller-mapping)
   - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
+- [Beta test checklist](beta-test-checklist.md) (session paths, gamepad controls, Switchres on/off)
 - [Recovery](#recovery)
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
 
@@ -68,19 +69,19 @@ touch /userdata/system/configs/fightcade-switchres.disable   # disable Switchres
 touch /userdata/system/configs/fightcade-switchres.force     # force Switchres on
 ```
 
-Remove the file to undo. `fightcade-diagnose` reports whether either flag is
-present.
+Remove the file to undo. `/userdata/system/fightcade-flatpak/fightcade-diagnose` reports whether either flag is
+present. Walk through the [Switchres on/off steps](beta-test-checklist.md#switchres-onoff-crt) in the beta checklist (Step 2 and Step 3 are optional).
 
 ## Recovery
 
 | Command | What it does |
 |---------|--------------|
-| `crt/fightcade-crt-recover` | Restore lobby timing and clear stale game sessions |
-| `fightcade-diagnose` | Print install state and CRT flags |
+| `/userdata/system/fightcade-flatpak/crt/fightcade-crt-recover` | Restore lobby timing and clear stale game sessions |
+| `/userdata/system/fightcade-flatpak/fightcade-diagnose` | Print install state and CRT flags |
 
 ## After a Fightcade Flatpak update
 
-Re-run `install.sh` after a Fightcade Flatpak update (Flathub can overwrite
+Re-run `/userdata/system/fightcade-flatpak/install.sh` after a Fightcade Flatpak update (Flathub can overwrite
 `xdg-open`; the installer re-applies the patch from `xdg-open.fc-original`).
 
 [← Back to main README](../README.md)

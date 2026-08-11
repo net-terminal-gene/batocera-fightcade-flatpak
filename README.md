@@ -10,6 +10,14 @@ ROM path wiring for Flatpak Fightcade on Batocera. One command links your
 existing `/userdata/roms` folders into the Fightcade Flatpak data tree so games
 you already have show up without duplication.
 
+## Beta Testing
+
+This installer is in **beta**. Before you report issues, walk through
+[docs/beta-test-checklist.md](docs/beta-test-checklist.md) for **HD mode** (LCD / HDMI)
+and **CRT mode** (xorg + Switchres + Batocera-CRT-Script). Each mode covers **TEST GAME**,
+**TRAINING**, **ONLINE MATCH**, **REPLAY**, and **LIVE SPECTATING**. Include output from
+`/userdata/system/fightcade-flatpak/fightcade-diagnose` in your report. Post feedback in the [Discord beta thread](https://discord.com/channels/357518249883205632/1536626216105148436).
+
 ## Contents
 
 #### Quick Install & Setup
@@ -24,12 +32,17 @@ you already have show up without duplication.
   - [Keyboard shortcuts (HD)](#keyboard-shortcuts-hd)
 - [Commands](#commands)
 - [Re-running the installer](#re-running-the-installer)
+
+#### CRT
 - [CRT / Switchres support](docs/CRT.md)
   - [Controls and navigation](docs/CRT.md#controls--navigation)
     - [Game controller mapping](docs/CRT.md#game-controller-mapping)
   - [Switchres flags](docs/CRT.md#switchres-flags)
   - [Recovery](docs/CRT.md#recovery)
   - [After a Fightcade Flatpak update](docs/CRT.md#after-a-fightcade-flatpak-update)
+
+#### BETA Testing
+- [Beta test checklist](docs/beta-test-checklist.md)
 
 ## Install
 
@@ -234,11 +247,11 @@ Alt+Enter for you.
 
 | Command | What it does |
 |---------|--------------|
-| `fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks |
-| `hd/patch-hd-video.sh` | Apply HD fullscreen, aspect, and vsync defaults (also run by `install.sh`) |
-| `fightcade-diagnose` | Print install state, link health, and artwork / patch status |
-| `uninstall.sh` | Remove links, hook, overrides, xdg-open patch, and scripts (ROMs and Flatpak untouched) |
-| `uninstall.sh --uninstall-flatpak` | Also uninstall the Fightcade Flatpak |
+| `/userdata/system/fightcade-flatpak/fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks |
+| `/userdata/system/fightcade-flatpak/hd/patch-hd-video.sh` | Apply HD fullscreen, aspect, and vsync defaults (also run by `/userdata/system/fightcade-flatpak/install.sh`) |
+| `/userdata/system/fightcade-flatpak/fightcade-diagnose` | Print install state, link health, and artwork / patch status |
+| `/userdata/system/fightcade-flatpak/uninstall.sh` | Remove links, hook, overrides, xdg-open patch, and scripts (ROMs and Flatpak untouched) |
+| `/userdata/system/fightcade-flatpak/uninstall.sh --uninstall-flatpak` | Also uninstall the Fightcade Flatpak |
 
 ## Re-running the installer
 
