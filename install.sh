@@ -10,7 +10,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -254,6 +254,17 @@ migrate_crt_layout() {
   fi
 }
 
+migrate_hd_layout() {
+  local pd="$1"
+  mkdir -p "${pd}/hd"
+  if [ -f "${pd}/crt/patch-hd-video.sh" ] && [ ! -e "${pd}/hd/patch-hd-video.sh" ]; then
+    mv "${pd}/crt/patch-hd-video.sh" "${pd}/hd/patch-hd-video.sh"
+  fi
+  if [ -d "${pd}/crt/hd-presets" ] && [ ! -d "${pd}/hd/presets" ]; then
+    mv "${pd}/crt/hd-presets" "${pd}/hd/presets"
+  fi
+}
+
 remove_legacy_duplicates() {
   local pd="$1"
   if [ -x "${pd}/input/fightcade-pad-mouse" ] && [ -f "${pd}/fightcade-pad-mouse" ]; then
@@ -270,6 +281,12 @@ remove_legacy_duplicates() {
   fi
   if [ -x "${pd}/crt/fightcade-crt-recover" ] && [ -f "${pd}/fightcade-crt-recover" ]; then
     rm -f "${pd}/fightcade-crt-recover"
+  fi
+  if [ -x "${pd}/hd/patch-hd-video.sh" ] && [ -f "${pd}/crt/patch-hd-video.sh" ]; then
+    rm -f "${pd}/crt/patch-hd-video.sh"
+  fi
+  if [ -d "${pd}/hd/presets" ] && [ -d "${pd}/crt/hd-presets" ]; then
+    rm -rf "${pd}/crt/hd-presets"
   fi
 }
 
@@ -432,6 +449,7 @@ fetch_files "${TMP_DIR}"
 mkdir -p "${PROJECT_DIR}" "${SCRIPTS_DIR}" "${LOG_DIR}"
 migrate_input_layout "${PROJECT_DIR}"
 migrate_crt_layout "${PROJECT_DIR}"
+migrate_hd_layout "${PROJECT_DIR}"
 remove_legacy_duplicates "${PROJECT_DIR}"
 
 for file in ${FILES}; do
@@ -453,6 +471,12 @@ stop_legacy_crt_watch
 # First sync
 notice "Running initial ROM sync..."
 "${PROJECT_DIR}/fightcade-roms-sync"
+
+if [ -x "${PROJECT_DIR}/hd/patch-hd-video.sh" ]; then
+    notice "Applying HD video defaults (FBNeo, SNES9x, Flycast)..."
+    "${PROJECT_DIR}/hd/patch-hd-video.sh" && ok "HD video defaults applied" || \
+        warn "HD video patch did not complete; re-run ${PROJECT_DIR}/hd/patch-hd-video.sh"
+fi
 
 # Update ES games list so Fightcade appears in Ports if freshly installed
 if command -v batocera-flatpak-update >/dev/null 2>&1; then

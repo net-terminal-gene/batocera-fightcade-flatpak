@@ -8,6 +8,7 @@ set -eu
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
 CRT_DIR="${PROJECT_DIR}/crt"
+HD_DIR="${PROJECT_DIR}/hd"
 INPUT_DIR="${PROJECT_DIR}/input"
 SCRIPTS_DIR="/userdata/system/scripts"
 FLATPAK_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
@@ -90,6 +91,17 @@ for f in fightcade-crt-switchres fightcade-crt-hostd fightcade-crt-recover fight
         any_fail=1
     fi
 done
+
+hd_patch="${HD_DIR}/patch-hd-video.sh"
+if [ -x "$hd_patch" ]; then
+    pass "${hd_patch}"
+elif [ -f "$hd_patch" ]; then
+    fail "${hd_patch} (not executable)"
+    any_fail=1
+else
+    fail "${hd_patch} (missing)"
+    any_fail=1
+fi
 
 hook="${SCRIPTS_DIR}/fightcade-game-hook"
 if [ -x "$hook" ]; then
@@ -354,6 +366,71 @@ for cfg in "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" \
         any_fail=1
     fi
 done
+
+# ---------------------------------------------------------------------------
+head_section "HD video defaults"
+# ---------------------------------------------------------------------------
+
+hd_w=1920
+hd_h=1080
+hd_raw=""
+
+if command -v batocera-resolution >/dev/null 2>&1; then
+    hd_raw=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -n1 | tr -d '[:space:]')
+fi
+if [ -z "$hd_raw" ] && command -v xrandr >/dev/null 2>&1; then
+    hd_raw=$(DISPLAY=:0 xrandr --currentResolution 2>/dev/null | tail -n1 | awk '{print $1}')
+fi
+if [[ "$hd_raw" =~ ^([0-9]+)x([0-9]+) ]]; then
+    hd_w="${BASH_REMATCH[1]}"
+    hd_h="${BASH_REMATCH[2]}"
+fi
+info "detected display resolution for HD checks: ${hd_w}x${hd_h}"
+
+for preset in fcadefbneo.ini fcadesnes9x.conf flycast/emu.cfg; do
+    p="${HD_DIR}/presets/${preset}"
+    if [ -f "$p" ]; then
+        pass "HD preset bundled: hd/presets/${preset}"
+    else
+        fail "HD preset missing: hd/presets/${preset}"
+        any_fail=1
+    fi
+done
+
+check_hd_ini_key() {
+    local label="$1" file="$2" pattern="$3"
+    if [ ! -f "$file" ]; then
+        info "${label}: config not present yet"
+        return 0
+    fi
+    if grep -qE "$pattern" "$file"; then
+        pass "${label}"
+    else
+        fail "${label} (run hd/patch-hd-video.sh)"
+        any_fail=1
+    fi
+}
+
+check_hd_ini_key "FBNeo correct aspect" \
+    "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" '^bVidCorrectAspect 1'
+check_hd_ini_key "FBNeo no full stretch" \
+    "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" '^bVidFullStretch 0'
+check_hd_ini_key "FBNeo vsync" \
+    "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" '^bVidVSync 1'
+check_hd_ini_key "FBNeo hor width" \
+    "${FLATPAK_DATA}/config/fcadefbneo/fcadefbneo.ini" "^nVidHorWidth ${hd_w}"
+check_hd_ini_key "SNES9x fullscreen width" \
+    "${FLATPAK_DATA}/config/snes9x/fcadesnes9x.conf" "Fullscreen:Width[[:space:]]*=[[:space:]]*${hd_w}"
+check_hd_ini_key "SNES9x fullscreen height" \
+    "${FLATPAK_DATA}/config/snes9x/fcadesnes9x.conf" "Fullscreen:Height[[:space:]]*=[[:space:]]*${hd_h}"
+check_hd_ini_key "SNES9x vsync" \
+    "${FLATPAK_DATA}/config/snes9x/fcadesnes9x.conf" 'Vsync[[:space:]]*=[[:space:]]*TRUE'
+check_hd_ini_key "Flycast fullscreen" \
+    "${FLATPAK_DATA}/config/flycast/emu.cfg" '^fullscreen = yes'
+check_hd_ini_key "Flycast window width" \
+    "${FLATPAK_DATA}/config/flycast/emu.cfg" "^width = ${hd_w}"
+check_hd_ini_key "Flycast vsync" \
+    "${FLATPAK_DATA}/config/flycast/emu.cfg" '^rend\.vsync = yes'
 
 # ---------------------------------------------------------------------------
 head_section "Dreamcast BIOS"

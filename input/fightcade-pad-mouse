@@ -453,6 +453,14 @@ def crt_paused() -> bool:
         return False
 
 
+def clear_crt_pause() -> None:
+    try:
+        with open(CRT_PAUSEFILE, "w", encoding="utf-8") as fh:
+            fh.write("0\n")
+    except OSError:
+        pass
+
+
 def list_gamepad_event_nodes(device_match: str) -> list[tuple[str, str]]:
     pads: list[tuple[str, str]] = []
     for js_path in sorted(glob.glob("/dev/input/by-id/*-joystick")):
@@ -783,6 +791,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     log("SELECT+Y triggered CRT resume")
                 elif session.flycast_combo_available():
                     flycast_menu_cursor = False
+                    clear_crt_pause()
                     last_resume_at = now
                     set_cursor_visible(False, display)
                     cursor_visible = False

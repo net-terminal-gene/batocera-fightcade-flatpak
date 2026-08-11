@@ -18,6 +18,7 @@ you already have show up without duplication.
 - [ROM path mapping](#rom-path-mapping)
 
 #### Advanced
+- [HD video defaults](#hd-video-defaults)
 - [Controls and Navigation](#controls--navigation)
   - [Game controller mapping](#game-controller-mapping)
   - [Keyboard shortcuts (HD)](#keyboard-shortcuts-hd)
@@ -32,7 +33,11 @@ you already have show up without duplication.
 
 ## Install
 
-SSH into your Batocera device, then run:
+[SSH into your Batocera device](https://wiki.batocera.org/access_the_batocera_via_ssh), or open **xterm** from the file manager (F1 → Applications) on xorg builds, then run:
+
+> [!NOTE]
+> Your Batocera device must be **connected to the internet**. The installer downloads
+> scripts from GitHub and may install Fightcade from Flathub.
 
 ```bash
 curl -fsSL \
@@ -49,8 +54,10 @@ The installer:
    `/userdata/roms/<system>` folder describing Fightcade's ROM format and BIOS requirements.
 5. Installs controller settings for gamepad navigation in the lobby and in-game menus
    (see [Controls & Navigation](#controls--navigation)).
-6. Installs CRT / Switchres support on xorg CRT setups (see [CRT / Switchres support](docs/CRT.md)).
-7. Installs Ports artwork under `/userdata/roms/flatpak/images/` (`Fightcade.png` logo,
+6. Applies [HD video defaults](#hd-video-defaults) for FBNeo, SNES9x, and Flycast on
+   HD LCD / HDMI setups (fullscreen at current display size, correct aspect, vsync).
+7. Installs CRT / Switchres support on xorg CRT setups (see [CRT / Switchres support](docs/CRT.md)).
+8. Installs Ports artwork under `/userdata/roms/flatpak/images/` (`Fightcade.png` logo,
    `Fightcade-logo.png` marquee, `Fightcade-thumb.png` thumbnail) and wires `gamelist.xml`.
 
 ## ROM Format & BIOS Requirements
@@ -64,9 +71,6 @@ and validation details.
   filenames must match FBNeo's internal database exactly. Console games under
   `ROMs/fbneo/<system>/` (megadrive, nes, pce, etc.) also use Fightcade-format `.zip`
   sets with FBNeo shortnames, not normal Batocera long-title dumps or `.7z` archives.
-- **ggpofba (legacy FightcadeFBA):** Based on GGPOFBA. Used for older FC1 titles only;
-  most users need `fbneo` instead. ROM requirements follow Fightcade's legacy FBA rules
-  (see the help link above).
 - **snes9x (FightcadeSNES):** Based on SNES9x. Fightcade shortname `.zip` sets are the
   safe choice; `.smc` and `.sfc` may work if they match Fightcade's ROM database.
   Long-title dumps or `.7z` archives will not work.
@@ -83,6 +87,12 @@ and validation details.
 - **Naomi / Atomiswave (flycast):** Fightcade `.zip` BIOS + game sets via the flycast
   links. No separate BIOS path; those BIOS ZIPs live alongside the game ZIPs in the ROM
   folder.
+- **ggpofba (legacy FightcadeFBA):** Optional. Still present in Fightcade V2 for **legacy
+  FC1** channels only (look for **FC1** in the channel list). Normal V2 arcade play uses
+  **fbneo** instead. You can ignore this emulator unless you join FC1 rooms. ROM
+  requirements follow Fightcade's legacy FBA rules (see the help link above). This
+  installer creates an empty `ROMs/ggpofba` folder but does not link Batocera ROMs into
+  it.
 
 ## ROM Path Mapping
 
@@ -119,6 +129,61 @@ When a source directory does not exist, an empty real directory is created inste
 > setup, mount points, or where your ROMs physically live. If your library is on a
 > secondary drive merged into `/userdata/roms` via Storage Manager, the symlinks still
 > work: Fightcade reads through the unified path, not a copy on internal storage.
+
+## HD video defaults
+
+On HD LCD / HDMI setups (1080p, 1440p, 4K, and so on), stock Fightcade emulators
+often launch windowed or stretch the image past the screen edges. The installer
+applies HD-friendly fullscreen, aspect, and vsync settings for **FBNeo, SNES9x,
+and Flycast** (what most V2 players use daily).
+
+`install.sh` runs `hd/patch-hd-video.sh` after the initial ROM sync. That script:
+
+1. Reads the **current display resolution** from `batocera-resolution` (falls back to
+   `xrandr` if needed; default 1920×1080 when detection fails, e.g. SSH with no X session).
+2. Copies preset configs from `hd/presets/` when an emulator config file does not
+   exist yet (so you do not have to launch each emulator once before install can help).
+3. Patches existing configs in place at the detected resolution so re-running the
+   installer refreshes the same keys.
+
+If you change display mode (e.g. switch from 1080p to 1440p), re-run
+`hd/patch-hd-video.sh` or the full installer so emulator fullscreen sizes match.
+
+| Emulator | Fullscreen | Aspect | Vsync |
+|----------|------------|--------|-------|
+| FBNeo (`fcadefbneo.ini`) | Auto-switch fullscreen at detected resolution | Correct aspect, no full stretch | On + triple buffer |
+| SNES9x (`fcadesnes9x.conf`) | Detected resolution, emulate fullscreen, lock config | Maintain 4:3 (base width 299) | On |
+| Flycast (`emu.cfg`) | `fullscreen = yes` at detected resolution | (game default) | `rend.vsync = yes` |
+| GGPOFBA (`ggpofba.ini`) | Legacy **FC1** channels only (optional) | — | On + triple buffer (if config exists) |
+
+GGPOFBA is the old FightcadeFBA emulator. Fightcade V2 still launches it for **FC1**
+legacy channels, but you can ignore it unless you play in those rooms. The HD patch
+only touches `ggpofba.ini` when that file already exists (after you launch legacy FBA
+once).
+
+Preset files live in the Flatpak data tree:
+
+```
+/userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/data/config/
+  fcadefbneo/fcadefbneo.ini
+  snes9x/fcadesnes9x.conf
+  flycast/emu.cfg
+  ggpofba/ggpofba.ini          # legacy FC1 only; optional
+```
+
+Re-apply HD defaults any time (after a Flatpak update, or if an emulator reset its config):
+
+```bash
+/userdata/system/fightcade-flatpak/hd/patch-hd-video.sh
+```
+
+Or re-run the full installer; it is safe on an existing install.
+
+> [!NOTE]
+> **CRT users:** HD presets set the lobby / HD baseline. During a CRT game,
+> [Switchres](docs/CRT.md) temporarily overrides FBNeo and SNES9x video settings for
+> native resolution, then restores the HD baseline when the game exits. CRT gameplay
+> is not changed by these presets.
 
 ## Controls & Navigation
 
@@ -170,6 +235,7 @@ Alt+Enter for you.
 | Command | What it does |
 |---------|--------------|
 | `fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks |
+| `hd/patch-hd-video.sh` | Apply HD fullscreen, aspect, and vsync defaults (also run by `install.sh`) |
 | `fightcade-diagnose` | Print install state, link health, and artwork / patch status |
 | `uninstall.sh` | Remove links, hook, overrides, xdg-open patch, and scripts (ROMs and Flatpak untouched) |
 | `uninstall.sh --uninstall-flatpak` | Also uninstall the Fightcade Flatpak |
@@ -177,6 +243,6 @@ Alt+Enter for you.
 ## Re-running the installer
 
 Re-running the installer over an existing install is safe. It creates missing links,
-refreshes changed ones, and does not modify real user files.
+refreshes changed ones, reapplies HD video defaults, and does not modify real user files.
 
 License: [CC0 1.0](LICENSE)

@@ -383,7 +383,7 @@ emu_running_for() {
 # First wine-menu emulator with a live process (CRT session or HD / no Switchres).
 fightcade_running_wine_menu_emu() {
     local e
-    for e in fbneo ggpofba snes9x; do
+    for e in fbneo snes9x ggpofba; do
         if emu_running_for "$e"; then
             printf '%s\n' "$e"
             return 0
@@ -466,6 +466,10 @@ flycast_game_loaded() {
 
 fightcade_flycast_game_begin() {
     touch "$FLYCAST_GAME_FLAG"
+    # Stale FBNeo/SNES menu pause (HD) must not keep the cursor visible over Flycast.
+    if [ ! -f "$STATEFILE" ] || ! grep -q '^ACTIVE=1' "$STATEFILE" 2>/dev/null; then
+        printf '0\n' > "$PAUSEFILE"
+    fi
     fightcade_cursor_hide
 }
 
@@ -1070,6 +1074,7 @@ fightcade_crt_esc_pause() {
     fi
 
     emu=$(fightcade_running_wine_menu_emu) || return 0
+    printf '1\n' > "$PAUSEFILE"
     fightcade_wine_emu_send_key "$emu" Escape
     fightcade_cursor_show
 }
@@ -1089,6 +1094,7 @@ fightcade_crt_resume() {
     fi
 
     emu=$(fightcade_running_wine_menu_emu) || return 0
+    printf '0\n' > "$PAUSEFILE"
     fightcade_wine_emu_resume_keys "$emu" full
     fightcade_cursor_hide
 }
