@@ -220,15 +220,18 @@ Or re-run the full installer; it is safe on an existing install.
 **Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
 = emulator menu bar visible. **Flycast menu** = in-game overlay with cursor visible.
 
-| Where you are | Left Analog/D-pad | Left Analog/D-pad + B | A | SELECT + X | SELECT + Y | SELECT + R1 |
-|---------------|---------------|-----------|---|------------|------------|-------------|
-| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **FBNeo playing** | — | — | — | Open FBNeo menu (ESC) | — | — |
-| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **SNES playing** | — | — | — | Open Snes9x menu (ESC) | — | — |
-| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **Flycast playing** | — | — | — | Open Menu | Resume game | — |
-| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Open Menu | Resume game | — |
+To challenge someone in a room: **B** (right click) on their name, then **A** (left click)
+**Challenge**.
+
+| Where you are | Left Analog/D-pad | Left Analog/D-pad + R2 | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
+|---------------|-------------------|------------------------|---|---|------------|------------|-------------|
+| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **FBNeo playing** | — | — | — | — | Open FBNeo menu (ESC) | — | — |
+| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **SNES playing** | — | — | — | — | Open Snes9x menu (ESC) | — | — |
+| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **Flycast playing** | — | — | — | — | Open Menu | Resume game | — |
+| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | Open Menu | Resume game | — |
 
 ### Keyboard shortcuts (HD)
 

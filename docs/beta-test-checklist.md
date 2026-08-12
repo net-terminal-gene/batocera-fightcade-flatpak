@@ -78,8 +78,9 @@ Chat still needs a keyboard. If gamepad navigation does nothing, check
 ### Lobby (Fightcade UI)
 
 - [ ] Left stick / D-pad moves cursor (fast)
-- [ ] Left stick / D-pad + **B** moves cursor (slow)
+- [ ] Left stick / D-pad + **R2** moves cursor (slow)
 - [ ] **A** = left click
+- [ ] **B** = right click (e.g. challenge player from name context menu)
 - [ ] **SELECT + R1** cycles focus between open windows (EmulationStation vs emulator vs Fightcade)
 
 ### FBNeo (arcade and console cores)
@@ -91,8 +92,9 @@ Chat still needs a keyboard. If gamepad navigation does nothing, check
 
 **While FBNeo menu is open:**
 
-- [ ] Stick / D-pad + **B** move the menu cursor (fast / slow)
+- [ ] Stick / D-pad + **R2** move the menu cursor (fast / slow)
 - [ ] **A** = left click in the menu
+- [ ] **B** = right click in the menu
 - [ ] **SELECT + Y** resumes the game and hides the menu cursor
 - [ ] On **CRT** with Switchres active: display returns to the game's **native modeline** after resume
 - [ ] **SELECT + R1** cycles window focus
@@ -110,7 +112,7 @@ Chat still needs a keyboard. If gamepad navigation does nothing, check
 
 **While Snes9x menu is open:**
 
-- [ ] Menu cursor navigation (**A**, stick, stick + **B**) works
+- [ ] Menu cursor navigation (**A**, **B**, stick, stick + **R2**) works
 - [ ] **SELECT + Y** resumes the game
 - [ ] On **CRT**: same Switchres pause / resume behavior as FBNeo when a Switchres session is active
 

@@ -39,15 +39,15 @@ For other keyboard shortcuts, see
 = emulator menu bar visible at lobby resolution. **Flycast menu** = in-game overlay
 with cursor visible.
 
-| Where you are | Left Analog/D-pad | Left Analog/D-pad + B | A | SELECT + X | SELECT + Y | SELECT + R1 |
-|---------------|---------------|-----------|---|------------|------------|-------------|
-| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **FBNeo playing** | — | — | — | Open Menu | — | — |
-| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **SNES playing** | — | — | — | Open Menu | — | — |
-| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **Flycast playing** | — | — | — | Open Menu | Resume game | — |
-| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Open Menu | Resume game | — |
+| Where you are | Left Analog/D-pad | Left Analog/D-pad + R2 | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
+|---------------|-------------------|------------------------|---|---|------------|------------|-------------|
+| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **FBNeo playing** | — | — | — | — | Open Menu | — | — |
+| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **SNES playing** | — | — | — | — | Open Menu | — | — |
+| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **Flycast playing** | — | — | — | — | Open Menu | Resume game | — |
+| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | Open Menu | Resume game | — |
 
 ### Keyboard (FBNeo / SNES)
 

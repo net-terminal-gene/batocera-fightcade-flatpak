@@ -12,6 +12,7 @@ from __future__ import annotations
 import fcntl
 import glob
 import os
+import re
 import select
 import signal
 import struct
@@ -48,6 +49,7 @@ BTN_EAST = 0x131
 BTN_NORTH = 0x133
 BTN_WEST = 0x134
 BTN_TR = 0x137
+BTN_TR2 = 0x139
 BTN_SELECT = 0x13A
 
 WRAP_SCRIPT = "/userdata/system/fightcade-flatpak/crt/fightcade-crt-switchres"
@@ -388,8 +390,8 @@ class XdotoolClient:
                 "while read -r cmd a1 a2; do "
                 'case "$cmd" in '
                 "move) xdotool mousemove_relative -- \"$a1\" \"$a2\" ;; "
-                "down) xdotool mousedown 1 ;; "
-                "up) xdotool mouseup 1 ;; "
+                "down) xdotool mousedown \"$a1\" ;; "
+                "up) xdotool mouseup \"$a1\" ;; "
                 'key) xdotool key --clearmodifiers "$a1" ;; '
                 "esac; done",
             ],
@@ -421,11 +423,14 @@ class XdotoolClient:
             return
         self._send(f"move {dx} {dy}")
 
+    def mouse_button(self, button: int, down: bool) -> None:
+        self._send(f"{'down' if down else 'up'} {button}")
+
     def mouse_down(self) -> None:
-        self._send("down")
+        self.mouse_button(1, True)
 
     def mouse_up(self) -> None:
-        self._send("up")
+        self.mouse_button(1, False)
 
     def key(self, combo: str) -> None:
         self._send(f"key {combo}")
@@ -537,6 +542,67 @@ def load_pad_axis_caps(event_path: str) -> dict[int, tuple[int, int, int]]:
     return caps
 
 
+def initial_axes(
+    event_path: str,
+    caps: dict[int, tuple[int, int, int]],
+) -> dict[int, int]:
+    """Seed stick state from the kernel; evdev does not emit ABS on open."""
+    axes: dict[int, int] = {}
+    if HAS_EVDEV:
+        try:
+            dev = InputDevice(event_path)
+            for code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+                try:
+                    axes[code] = dev.absinfo(code).value
+                except (OSError, TypeError):
+                    mn, mx, _flat = caps.get(code, (0, 0, 0))
+                    axes[code] = int((mn + mx) / 2) if code in (ABS_X, ABS_Y) else 0
+            dev.close()
+            return axes
+        except OSError as exc:
+            log(f"initial axes read failed {event_path}: {exc}")
+    for code in (ABS_X, ABS_Y):
+        mn, mx, _flat = caps.get(code, (-32768, 32767, 0))
+        axes[code] = int((mn + mx) / 2)
+    axes[ABS_HAT0X] = 0
+    axes[ABS_HAT0Y] = 0
+    return axes
+
+
+def disable_fake_touchpad_pointers(display: str) -> None:
+    """Brook/clone DualSense touchpads report (0,0) and drag the X cursor."""
+    try:
+        out = subprocess.run(
+            ["xinput", "list"],
+            env={**os.environ, "DISPLAY": display},
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if out.returncode != 0:
+            return
+        env = {**os.environ, "DISPLAY": display}
+        for line in out.stdout.splitlines():
+            if "touchpad" not in line.lower():
+                continue
+            match = re.search(r"\bid=(\d+)\b", line)
+            if not match:
+                continue
+            dev_id = match.group(1)
+            subprocess.run(
+                ["xinput", "disable", dev_id],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                check=False,
+            )
+            log(f"disabled X touchpad pointer id={dev_id}")
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def axis_to_float(
     value: int,
     min_v: int,
@@ -585,11 +651,8 @@ def move_mouse(dx: int, dy: int, xdotool: XdotoolClient) -> None:
     xdotool.move(dx, dy)
 
 
-def set_mouse_button(down: bool, xdotool: XdotoolClient) -> None:
-    if down:
-        xdotool.mouse_down()
-    else:
-        xdotool.mouse_up()
+def set_mouse_button(down: bool, xdotool: XdotoolClient, button: int = 1) -> None:
+    xdotool.mouse_button(button, down)
 
 
 def send_alt_tab(xdotool: XdotoolClient) -> None:
@@ -679,23 +742,22 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
 
     labels = ", ".join(p[0] for p in pads)
     log(f"gamepads: {labels} on DISPLAY={display} (SELECT+X pause, SELECT+Y resume)")
+    disable_fake_touchpad_pointers(display)
     set_cursor_visible(True, display)
 
     try:
         for _label, event_path in pads:
             event_fds[os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)] = event_path
             axis_caps_by_pad[event_path] = load_pad_axis_caps(event_path)
-            axes_by_pad[event_path] = {
-                ABS_X: 0,
-                ABS_Y: 0,
-                ABS_HAT0X: 0,
-                ABS_HAT0Y: 0,
-            }
+            axes_by_pad[event_path] = initial_axes(
+                event_path, axis_caps_by_pad[event_path]
+            )
     except OSError as exc:
         log(f"open input device failed: {exc}")
         return
 
-    mouse_held = False
+    left_held = False
+    right_held = False
     pause_combo_was_active = False
     resume_combo_was_active = False
     tab_combo_was_active = False
@@ -711,9 +773,12 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
         while True:
             session.refresh(display)
             if os.path.isfile(DISABLE) or not session.fc_running:
-                if mouse_held:
-                    set_mouse_button(False, xdotool)
-                    mouse_held = False
+                if left_held:
+                    set_mouse_button(False, xdotool, 1)
+                    left_held = False
+                if right_held:
+                    set_mouse_button(False, xdotool, 3)
+                    right_held = False
                 if not cursor_visible:
                     set_cursor_visible(True, display)
                     cursor_visible = True
@@ -745,16 +810,27 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
 
             select_down = key_down(key_state, BTN_SELECT)
             south_down = key_down(key_state, BTN_SOUTH)
+            east_down = key_down(key_state, BTN_EAST)
             if allow_click:
-                if south_down and not select_down and not mouse_held:
-                    set_mouse_button(True, xdotool)
-                    mouse_held = True
-                elif (not south_down or select_down) and mouse_held:
-                    set_mouse_button(False, xdotool)
-                    mouse_held = False
-            elif mouse_held:
-                set_mouse_button(False, xdotool)
-                mouse_held = False
+                if south_down and not select_down and not left_held:
+                    set_mouse_button(True, xdotool, 1)
+                    left_held = True
+                elif (not south_down or select_down) and left_held:
+                    set_mouse_button(False, xdotool, 1)
+                    left_held = False
+                if east_down and not select_down and not right_held:
+                    set_mouse_button(True, xdotool, 3)
+                    right_held = True
+                elif (not east_down or select_down) and right_held:
+                    set_mouse_button(False, xdotool, 3)
+                    right_held = False
+            else:
+                if left_held:
+                    set_mouse_button(False, xdotool, 1)
+                    left_held = False
+                if right_held:
+                    set_mouse_button(False, xdotool, 3)
+                    right_held = False
 
             now = time.time()
             pause_active = select_down and key_down(key_state, BTN_WEST)
@@ -805,6 +881,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and not key_down(key_state, BTN_WEST)
                 and not key_down(key_state, BTN_NORTH)
                 and not key_down(key_state, BTN_TR)
+                and not key_down(key_state, BTN_TR2)
             ):
                 flycast_menu_cursor = True
                 set_cursor_visible(True, display)
@@ -835,7 +912,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 ny = axis_to_float(
                     axes.get(ABS_Y, 0), y_min, y_max, y_flat, deadzone, deadzone_8bit
                 )
-                fine_nudge = key_down(key_state, BTN_EAST)
+                fine_nudge = key_down(key_state, BTN_TR2)
                 move_speed = slow_speed if fine_nudge else max_speed
                 dx = int(round(nx * move_speed))
                 dy = int(round(ny * move_speed))
@@ -848,8 +925,10 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     dy += hy * step
                 move_mouse(dx, dy, xdotool)
     finally:
-        if mouse_held:
-            set_mouse_button(False, xdotool)
+        if left_held:
+            set_mouse_button(False, xdotool, 1)
+        if right_held:
+            set_mouse_button(False, xdotool, 3)
         xdotool.close()
         for fd in all_fds:
             try:
@@ -889,6 +968,7 @@ def cmd_probe(device_match: str) -> int:
                         BTN_WEST: "BTN_WEST(X)",
                         BTN_NORTH: "BTN_NORTH(Y)",
                         BTN_TR: "BTN_TR(R1)",
+                        BTN_TR2: "BTN_TR2(R2)",
                         BTN_SELECT: "BTN_SELECT",
                     }.get(code, f"code_{code}")
                     print(f"  {name} ({code}) = {val}")
