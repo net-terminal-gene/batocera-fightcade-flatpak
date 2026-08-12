@@ -173,6 +173,7 @@ remove_managed_link "${ROMS_ROOT}/fbneo/tg16"          "${HOST_ROMS}/pcengine"
 remove_managed_link "${ROMS_ROOT}/flycast/atomiswave"  "${HOST_ROMS}/atomiswave"
 remove_managed_link "${ROMS_ROOT}/flycast/naomi"       "${HOST_ROMS}/naomi"
 remove_managed_link "${ROMS_ROOT}/flycast/naomi2"      "${HOST_ROMS}/naomi2"
+# Legacy Dreamcast dir symlink (replaced by per-file links at flycast root).
 remove_managed_link "${ROMS_ROOT}/flycast/dreamcast"   "${HOST_ROMS}/dreamcast"
 
 ok "Dir symlinks removed"
@@ -197,6 +198,27 @@ if [ -d "${ROMS_ROOT}/fbneo" ]; then
 fi
 
 ok "Arcade symlinks removed: ${arcade_removed}"
+
+# ---------------------------------------------------------------------------
+# 3a. Remove managed Dreamcast per-file symlinks (ROMs/flycast/*.chd|.cdi)
+# ---------------------------------------------------------------------------
+notice "Removing managed Dreamcast per-file symlinks..."
+dc_removed=0
+
+if [ -d "${ROMS_ROOT}/flycast" ]; then
+    for dst_link in "${ROMS_ROOT}/flycast"/*.{chd,cdi}; do
+        [ -L "$dst_link" ] || continue
+        target=$(readlink "$dst_link")
+        case "$target" in
+            "${HOST_ROMS}/dreamcast/"*)
+                rm "$dst_link"
+                dc_removed=$((dc_removed + 1))
+                ;;
+        esac
+    done
+fi
+
+ok "Dreamcast symlinks removed: ${dc_removed}"
 
 # ---------------------------------------------------------------------------
 # 3b. Remove _fightcade.txt requirement notes

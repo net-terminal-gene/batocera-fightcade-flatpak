@@ -143,7 +143,7 @@ files into the Flatpak data directory by hand (except Dreamcast BIOS, above).
 | `ROMs/flycast/atomiswave/` | `/userdata/roms/atomiswave` | Dir symlink |
 | `ROMs/flycast/naomi/` | `/userdata/roms/naomi` | Dir symlink |
 | `ROMs/flycast/naomi2/` | `/userdata/roms/naomi2` | Dir symlink |
-| `ROMs/flycast/dreamcast/` | `/userdata/roms/dreamcast` | Dir symlink |
+| `ROMs/flycast/*.chd` (and `.cdi`) | `/userdata/roms/dreamcast/*` | Per-file symlinks at Flycast root (Fightcade expects Dreamcast games top-level, not under a `dreamcast/` subfolder) |
 
 When a source directory does not exist, an empty real directory is created instead.
 

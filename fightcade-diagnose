@@ -170,7 +170,13 @@ check_link "fbneo/msx"         "${ROMS_ROOT}/fbneo/msx"           "${HOST_ROMS}/
 check_link "flycast/atomiswave" "${ROMS_ROOT}/flycast/atomiswave" "${HOST_ROMS}/atomiswave"
 check_link "flycast/naomi"     "${ROMS_ROOT}/flycast/naomi"       "${HOST_ROMS}/naomi"
 check_link "flycast/naomi2"    "${ROMS_ROOT}/flycast/naomi2"      "${HOST_ROMS}/naomi2"
-check_link "flycast/dreamcast" "${ROMS_ROOT}/flycast/dreamcast"   "${HOST_ROMS}/dreamcast"
+
+if [ -L "${ROMS_ROOT}/flycast/dreamcast" ]; then
+    fail "legacy flycast/dreamcast dir link still present (run fightcade-roms-sync)"
+    any_fail=1
+elif [ -e "${ROMS_ROOT}/flycast/dreamcast" ]; then
+    info "flycast/dreamcast path exists but is not the old managed dir link"
+fi
 
 # ---------------------------------------------------------------------------
 head_section "fbneo arcade per-zip links"
@@ -192,6 +198,41 @@ if [ -d "${HOST_ROMS}/fbneo" ]; then
     fi
 else
     info "${HOST_ROMS}/fbneo does not exist; arcade links not applicable"
+fi
+
+# ---------------------------------------------------------------------------
+head_section "flycast Dreamcast per-file links"
+# ---------------------------------------------------------------------------
+
+if [ -d "${HOST_ROMS}/dreamcast" ]; then
+    dc_src=$(find "${HOST_ROMS}/dreamcast" -maxdepth 1 \( -name '*.chd' -o -name '*.cdi' \) 2>/dev/null | wc -l | tr -d ' ')
+    dc_dst=0
+    dc_dangling=0
+    for l in "${ROMS_ROOT}/flycast"/*.{chd,cdi}; do
+        [ -L "$l" ] || continue
+        target=$(readlink "$l")
+        case "$target" in
+            "${HOST_ROMS}/dreamcast/"*)
+                dc_dst=$((dc_dst + 1))
+                [ -e "$l" ] || dc_dangling=$((dc_dangling + 1))
+                ;;
+        esac
+    done
+
+    pass "source roms in ${HOST_ROMS}/dreamcast: ${dc_src}"
+    pass "managed dreamcast links in ROMs/flycast: ${dc_dst}"
+    if [ "$dc_dangling" -gt 0 ]; then
+        fail "dangling dreamcast links: ${dc_dangling} (run fightcade-roms-sync to prune)"
+        any_fail=1
+    else
+        pass "no dangling dreamcast links"
+    fi
+    if [ "$dc_src" -gt 0 ] && [ "$dc_dst" -lt "$dc_src" ]; then
+        fail "dreamcast link count below source count (run fightcade-roms-sync)"
+        any_fail=1
+    fi
+else
+    info "${HOST_ROMS}/dreamcast does not exist; dreamcast links not applicable"
 fi
 
 # ---------------------------------------------------------------------------

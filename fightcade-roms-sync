@@ -3,9 +3,11 @@
 #
 # Safe to re-run at any time:
 #   - Creates missing scaffold dirs
-#   - Creates or refreshes managed symlinks (dir and per-zip)
-#   - Prunes dangling managed arcade symlinks for zips removed from roms/fbneo
-#   - Never deletes real user files or unmanaged entries under ROMs/
+#   - Creates or refreshes managed symlinks (dir, arcade per-zip, Dreamcast per-file)
+#   - Prunes dangling managed arcade / Dreamcast links when host files are removed
+#   - Replaces Fightcade auto-downloaded Dreamcast files with links when the same
+#     name exists under /userdata/roms/dreamcast
+#   - Never deletes unmanaged entries under ROMs/
 #
 # Usage: fightcade-roms-sync [--quiet]
 
@@ -102,7 +104,8 @@ ensure_dir "${ROMS_ROOT}/ggpofba"
 # fbneo root must be a real directory (arcade ZIPs live flat; console subdirs live inside).
 ensure_dir "${ROMS_ROOT}/fbneo"
 
-# flycast root must be real (per-system subdirs are linked).
+# flycast root must be real: Naomi/AW subdirs are dir-linked; Dreamcast CHDs
+# are per-file linked into this root (Fightcade expects DC games top-level).
 ensure_dir "${ROMS_ROOT}/flycast"
 
 # snes9x: link to Batocera roms/snes if it exists, else real dir.
@@ -134,13 +137,91 @@ link_dir "${ROMS_ROOT}/fbneo/sgx"       "${HOST_ROMS}/supergrafx"
 link_dir "${ROMS_ROOT}/fbneo/tg16"      "${HOST_ROMS}/pcengine"
 
 # ---------------------------------------------------------------------------
-# flycast: per-system symlinks
+# flycast: Naomi / Atomiswave directory symlinks
 # ---------------------------------------------------------------------------
 
 link_dir "${ROMS_ROOT}/flycast/atomiswave" "${HOST_ROMS}/atomiswave"
 link_dir "${ROMS_ROOT}/flycast/naomi"      "${HOST_ROMS}/naomi"
 link_dir "${ROMS_ROOT}/flycast/naomi2"     "${HOST_ROMS}/naomi2"
-link_dir "${ROMS_ROOT}/flycast/dreamcast"  "${HOST_ROMS}/dreamcast"
+
+# ---------------------------------------------------------------------------
+# flycast Dreamcast: per-file symlinks at ROMs/flycast/ root
+# ---------------------------------------------------------------------------
+# Fightcade looks for Dreamcast CHDs (and some .cdi sets) directly under
+# ROMs/flycast/, not ROMs/flycast/dreamcast/. Batocera keeps them in
+# /userdata/roms/dreamcast/, so each file gets its own symlink — same model
+# as arcade fbneo zips.
+#
+# Migrate away from the old directory symlink if present.
+
+DC_SRC="${HOST_ROMS}/dreamcast"
+DC_DST="${ROMS_ROOT}/flycast"
+DC_LEGACY_LINK="${ROMS_ROOT}/flycast/dreamcast"
+
+if [ -L "${DC_LEGACY_LINK}" ]; then
+    legacy_target=$(readlink "${DC_LEGACY_LINK}")
+    if [ "${legacy_target}" = "${DC_SRC}" ]; then
+        rm "${DC_LEGACY_LINK}"
+        notice "removed legacy dir link: ${DC_LEGACY_LINK}"
+    else
+        warn "skipping legacy ${DC_LEGACY_LINK}: unexpected target '${legacy_target}'"
+    fi
+elif [ -d "${DC_LEGACY_LINK}" ] && [ -z "$(ls -A "${DC_LEGACY_LINK}" 2>/dev/null)" ]; then
+    rmdir "${DC_LEGACY_LINK}"
+    notice "removed empty legacy dir: ${DC_LEGACY_LINK}"
+fi
+
+dc_added=0
+dc_pruned=0
+dc_replaced=0
+
+if [ -d "${DC_SRC}" ]; then
+    for src_rom in "${DC_SRC}"/*.{chd,cdi}; do
+        [ -e "${src_rom}" ] || continue
+        name=$(basename "${src_rom}")
+        dst_link="${DC_DST}/${name}"
+
+        if [ -L "${dst_link}" ]; then
+            current=$(readlink "${dst_link}")
+            if [ "${current}" != "${src_rom}" ]; then
+                rm "${dst_link}"
+                ln -s "${src_rom}" "${dst_link}"
+                dc_added=$((dc_added + 1))
+            fi
+        elif [ -f "${dst_link}" ]; then
+            # Real file at Fightcade path (e.g. auto-download). Host copy is
+            # canonical — replace with a managed symlink to avoid duplicates.
+            rm "${dst_link}"
+            ln -s "${src_rom}" "${dst_link}"
+            dc_replaced=$((dc_replaced + 1))
+            notice "replaced real file with dreamcast link: ${name}"
+        elif [ -e "${dst_link}" ]; then
+            warn "dreamcast: ${dst_link} exists and is not a regular file/symlink; skipping"
+        else
+            ln -s "${src_rom}" "${dst_link}"
+            dc_added=$((dc_added + 1))
+        fi
+    done
+
+    # Prune dangling managed links (rom removed from /userdata/roms/dreamcast).
+    for dst_link in "${DC_DST}"/*.{chd,cdi}; do
+        [ -L "${dst_link}" ] || continue
+        target=$(readlink "${dst_link}")
+        case "${target}" in
+            "${DC_SRC}/"*)
+                if [ ! -e "${target}" ]; then
+                    rm "${dst_link}"
+                    dc_pruned=$((dc_pruned + 1))
+                    notice "pruned stale dreamcast link: $(basename "${dst_link}")"
+                fi
+                ;;
+        esac
+    done
+fi
+
+[ "${dc_added}" -gt 0 ] && ok "dreamcast roms linked/refreshed: ${dc_added}"
+[ "${dc_replaced}" -gt 0 ] && ok "dreamcast real files replaced with links: ${dc_replaced}"
+[ "${dc_pruned}" -gt 0 ] && ok "stale dreamcast links pruned: ${dc_pruned}"
 
 # ---------------------------------------------------------------------------
 # fbneo arcade: per-zip symlinks
@@ -289,9 +370,13 @@ write_fc_info "${HOST_ROMS}/atomiswave" "ATOMISWAVE (via Flycast)" ".zip" "$FLYC
 
 BIOS: awbios.zip must be in this folder alongside the games."
 
-write_fc_info "${HOST_ROMS}/dreamcast" "DREAMCAST (via Flycast)" ".chd" \
-"CHD files must match Fightcade's ROM database hashes exactly; standard
-Batocera CHD rips will fail Fightcade's hash check.
+write_fc_info "${HOST_ROMS}/dreamcast" "DREAMCAST (via Flycast)" ".chd .cdi" \
+"CHD (and some .cdi) files must match Fightcade's ROM database hashes exactly;
+standard Batocera CHD rips will fail Fightcade's hash check.
+
+Fightcade reads Dreamcast games from ROMs/flycast/ (top-level), not a
+dreamcast/ subfolder. This installer creates per-file symlinks from this
+folder into that Fightcade path.
 
 BIOS: dc_boot.bin and dc_flash.bin must be copied manually to:
 /userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data/"
