@@ -452,8 +452,16 @@ migrate_crt_layout "${PROJECT_DIR}"
 migrate_hd_layout "${PROJECT_DIR}"
 remove_legacy_duplicates "${PROJECT_DIR}"
 
+# install(1) does not create missing parent dirs; nested FILES like
+# hd/presets/... and hd/presets/flycast/... need mkdir -p first.
 for file in ${FILES}; do
-    install -m 0755 "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
+    dest_dir=$(dirname "${PROJECT_DIR}/${file}")
+    mkdir -p "${dest_dir}"
+    case "${file}" in
+        *.ini|*.conf|*/emu.cfg) mode=0644 ;;
+        *) mode=0755 ;;
+    esac
+    install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
 done
 ok "Scripts installed to ${PROJECT_DIR}"
 
