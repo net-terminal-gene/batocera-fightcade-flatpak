@@ -20,12 +20,18 @@ ES_SERVER="http://127.0.0.1:1234"
 
 AUTO_YES=0
 INSTALL_FIGHTCADE=0
+BRANCH_FROM_ARGS=""
 
 info()   { printf '%s\n'       "$*"; }
 notice() { printf '[INFO] %s\n' "$*"; }
 ok()     { printf '[ OK ] %s\n' "$*"; }
 warn()   { printf '[WARN] %s\n' "$*"; }
 fail()   { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+
+set_branch() {
+    BRANCH="$1"
+    RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+}
 
 usage() {
     cat <<USAGE
@@ -34,10 +40,15 @@ Usage: install.sh [options]
 Options:
   -y, --yes                 Accept all prompts automatically.
       --install-fightcade   Install Fightcade Flatpak if missing.
+      --branch NAME         GitHub branch or tag to fetch scripts from (default: main).
   -h, --help                Show this help.
 
 Environment:
-  FIGHTCADE_FLATPAK_BRANCH  GitHub branch or tag to download from (default: main).
+  FIGHTCADE_FLATPAK_BRANCH  Same as --branch. Must be exported (or set on bash),
+                            not only prefixed on curl — e.g.:
+                              export FIGHTCADE_FLATPAK_BRANCH=my-branch
+                              curl .../my-branch/install.sh | bash -s -- -y
+                            Or pass: bash -s -- -y --branch my-branch
 USAGE
 }
 
@@ -45,11 +56,21 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         -y|--yes)                AUTO_YES=1 ;;
         --install-fightcade)     INSTALL_FIGHTCADE=1 ;;
+        --branch)
+            [ "$#" -ge 2 ] || fail "--branch requires a branch or tag name"
+            BRANCH_FROM_ARGS="$2"
+            shift
+            ;;
         -h|--help)               usage; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
     shift
 done
+
+# --branch wins over the environment default set above.
+if [ -n "${BRANCH_FROM_ARGS}" ]; then
+    set_branch "${BRANCH_FROM_ARGS}"
+fi
 
 ask_yes_no() {
     local prompt="$1"
@@ -99,16 +120,20 @@ bootstrap_off_pipe_if_needed() {
 
     local bootstrap
     bootstrap=$(mktemp /tmp/fightcade-flatpak-install.XXXXXX.sh)
+    notice "Bootstrapping installer from ${RAW_BASE}/install.sh"
     curl -fsSL --retry 3 --connect-timeout 15 \
         "${RAW_BASE}/install.sh" -o "${bootstrap}" \
         || fail "Could not download install.sh from ${RAW_BASE}."
     chmod +x "${bootstrap}"
     export FIGHTCADE_INSTALL_BOOTSTRAPPED=1
+    # Keep branch selection across re-exec even if the env was only on curl.
+    export FIGHTCADE_FLATPAK_BRANCH="${BRANCH}"
 
     # "$@" is empty here (args were already parsed above); rebuild flags.
     local reexec_args=()
     [ "${AUTO_YES}" -eq 1 ] && reexec_args+=(-y)
     [ "${INSTALL_FIGHTCADE}" -eq 1 ] && reexec_args+=(--install-fightcade)
+    reexec_args+=(--branch "${BRANCH}")
     exec bash "${bootstrap}" "${reexec_args[@]}"
 }
 
@@ -163,16 +188,23 @@ install_fightcade_flatpak() {
 
     mkdir -p "${LOG_DIR}"
     local log="${LOG_DIR}/fightcade-flatpak-install.log"
-    notice "Flatpak output logged to ${log}"
+    : >"${log}"
+    notice "Flatpak progress below (also saved to ${log})"
 
     # Plain progress avoids the animated bar that corrupts SSH sessions.
+    # tee keeps the console live while still writing the log.
     export FLATPAK_PROGRESS=plain
-    if flatpak install --system -y flathub "${APP_ID}" >>"${log}" 2>&1; then
-        if flatpak info --system "${APP_ID}" >/dev/null 2>&1; then
-            ok "Fightcade Flatpak installed system-wide"
-        else
-            fail "Flatpak reported success but the system-wide Fightcade installation could not be verified. See ${log}"
-        fi
+    set +e
+    set -o pipefail
+    flatpak install --system -y flathub "${APP_ID}" 2>&1 | tee -a "${log}"
+    local fc_install_rc=${PIPESTATUS[0]}
+    set +o pipefail
+    set -e
+
+    if [ "${fc_install_rc}" -eq 0 ] && flatpak info --system "${APP_ID}" >/dev/null 2>&1; then
+        ok "Fightcade Flatpak installed system-wide"
+    elif [ "${fc_install_rc}" -eq 0 ]; then
+        fail "Flatpak reported success but the system-wide Fightcade installation could not be verified. See ${log}"
     else
         fail "Fightcade could not be installed. See ${log} or install via Batocera's Flatpak Manager and run this installer again."
     fi
@@ -204,7 +236,7 @@ patch_flatpak_xdg_open() {
 
     cat > "${xdg_open}" <<XDGOPEN
 #!/bin/bash
-# Patched by ${PROJECT_DIR}/install.sh for Batocera CRT Switchres (BUA model).
+# Patched by ${PROJECT_DIR}/install.sh for Batocera CRT Switchres.
 # fcade://play/* writes play.pending for fightcade-crt-hostd; fcade-quark stays in Flatpak.
 
 if [[ "\$1" == fcade://* ]]; then
@@ -472,7 +504,7 @@ ok "Game hook installed to ${SCRIPTS_DIR}/fightcade-game-hook"
 # Apply Flatpak filesystem overrides
 apply_overrides
 
-# Patch Flatpak xdg-open (BUA-style fcade:// intercept; re-applied after Flatpak updates)
+# Patch Flatpak xdg-open (fcade:// intercept; re-applied after Flatpak updates)
 patch_flatpak_xdg_open
 stop_legacy_crt_watch
 
@@ -514,8 +546,8 @@ info ""
 info "Dreamcast note: the BIOS (dc_boot.bin, dc_flash.bin) must live at:"
 info "  /userdata/saves/flatpak/data/.var/app/${APP_ID}/config/flycast/data/"
 info ""
-info "CRT (Switchres): on xorg CRT setups, fcade:// launches are wrapped like"
-info "the BUA Ports addon (no log daemon). Disable with:"
+info "CRT (Switchres): on xorg CRT setups, fcade:// launches are wrapped for"
+info "native-resolution switching (no log daemon). Disable with:"
 info "  touch /userdata/system/configs/fightcade-switchres.disable"
 info "Recovery after a stuck display:"
 info "  ${PROJECT_DIR}/crt/fightcade-crt-recover"

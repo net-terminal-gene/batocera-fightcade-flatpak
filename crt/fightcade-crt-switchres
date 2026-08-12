@@ -1,5 +1,5 @@
 #!/bin/bash
-# Switchres wrapper for Flatpak Fightcade fcade:// URLs (BUA model).
+# Switchres wrapper for Flatpak Fightcade fcade:// URLs.
 # Patched xdg-open writes play.pending for fcade://play/* and runs fcade-quark
 # inside the Flatpak. fightcade-crt-hostd on the host calls dispatch, which runs
 # pre (patch configs) and monitor (switchres session) in the background.

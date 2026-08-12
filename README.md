@@ -91,10 +91,21 @@ and validation details.
   be Fightcade CHD format with hashes matching the Fightcade ROM database; standard
   Batocera CHD rips will fail Fightcade's hash check.
 - **Dreamcast BIOS:** Fightcade's Flycast emulator reads the BIOS from its own config path,
-  not from the `ROMs/flycast/` tree. Copy `dc_boot.bin` and `dc_flash.bin` to:
+  not from the `ROMs/flycast/` tree. If you already have Dreamcast set up in Batocera, the
+  BIOS files are normally already at `/userdata/bios/dc/` (`dc_boot.bin` and
+  `dc_flash.bin`; see the [Batocera Dreamcast wiki](https://wiki.batocera.org/systems:dreamcast)).
+  Copy those into Fightcade's path:
 
   ```
   /userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data/
+  ```
+
+  Example if your BIOS are already installed:
+
+  ```bash
+  mkdir -p /userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data
+  cp /userdata/bios/dc/dc_boot.bin /userdata/bios/dc/dc_flash.bin \
+    /userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data/
   ```
 
 - **Naomi / Atomiswave (flycast):** Fightcade `.zip` BIOS + game sets via the flycast

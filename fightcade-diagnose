@@ -265,7 +265,7 @@ if [ -f /userdata/system/configs/fightcade-pad-mouse.disable ]; then
 fi
 
 # ---------------------------------------------------------------------------
-head_section "CRT / Switchres (BUA xdg-open model)"
+head_section "CRT / Switchres (xdg-open model)"
 # ---------------------------------------------------------------------------
 
 if command -v wmctrl >/dev/null 2>&1; then
