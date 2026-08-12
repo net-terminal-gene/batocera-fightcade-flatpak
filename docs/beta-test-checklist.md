@@ -15,16 +15,50 @@ Post results in the **beta thread on Discord**: https://discord.com/channels/357
 
 ---
 
+## Beta unlock script (beta testers only)
+
+Use this to install or upgrade to a **GitHub branch** before it merges to `main`.
+No repo clone required: the installer downloads scripts over HTTPS from GitHub.
+
+Replace `BRANCH` with the branch under test (e.g. `fix/my-feature`):
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh \
+  | bash -s -- -y --branch BRANCH
+```
+
+- Keep the curl URL on `main/install.sh`; `--branch` selects which ref all files come from.
+- Re-running over an existing install is safe (overwrites `/userdata/system/fightcade-flatpak/`).
+- Records the branch in `.install-branch`; `fightcade-diagnose` shows **Installer source branch**.
+- **Exit Fightcade and relaunch** after upgrading so background helpers reload.
+
+Alternative (same behavior):
+
+```bash
+export FIGHTCADE_FLATPAK_BRANCH=BRANCH
+curl -fsSL \
+  https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh \
+  | bash -s -- -y
+```
+
+Return to stable `main`:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh \
+  | bash -s -- -y
+```
+
+---
+
 ## Before you start (all testers)
 
 - [ ] Batocera is online during install
-- [ ] Install from README completed without errors:
-  ```bash
-  curl -fsSL \
-    https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh \
-    | bash -s -- -y
-  ```
+- [ ] Install completed without errors (stable `main` from [README](../README.md#install),
+      or [beta unlock script](#beta-unlock-script-beta-testers-only) for a PR branch)
 - [ ] `/userdata/system/fightcade-flatpak/fightcade-diagnose` runs and you saved the output
+      (if using a branch, confirm **Installer source branch** matches)
 - [ ] Fightcade appears under **Ports** in EmulationStation (Flatpak entry + artwork)
 - [ ] At least one Fightcade-format ROM set for each system is in `/userdata/roms` (see README mapping)
 - [ ] You can sign into Fightcade and reach a channel lobby

@@ -6,6 +6,7 @@ BRANCH="${FIGHTCADE_FLATPAK_BRANCH:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
+INSTALL_BRANCH_FILE="${PROJECT_DIR}/.install-branch"
 SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
@@ -40,15 +41,7 @@ Usage: install.sh [options]
 Options:
   -y, --yes                 Accept all prompts automatically.
       --install-fightcade   Install Fightcade Flatpak if missing.
-      --branch NAME         GitHub branch or tag to fetch scripts from (default: main).
   -h, --help                Show this help.
-
-Environment:
-  FIGHTCADE_FLATPAK_BRANCH  Same as --branch. Must be exported (or set on bash),
-                            not only prefixed on curl — e.g.:
-                              export FIGHTCADE_FLATPAK_BRANCH=my-branch
-                              curl .../my-branch/install.sh | bash -s -- -y
-                            Or pass: bash -s -- -y --branch my-branch
 USAGE
 }
 
@@ -433,6 +426,11 @@ install_artwork() {
 
 bootstrap_off_pipe_if_needed "$@"
 
+record_install_branch() {
+    mkdir -p "${PROJECT_DIR}"
+    printf '%s\n' "${BRANCH}" > "${INSTALL_BRANCH_FILE}"
+}
+
 printf '%s\n' '------------------------------------------------------------'
 printf '%s\n' ' Fightcade Flatpak ROMs Installer for Batocera'
 printf '%s\n' '------------------------------------------------------------'
@@ -495,6 +493,7 @@ for file in ${FILES}; do
     esac
     install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
 done
+record_install_branch
 ok "Scripts installed to ${PROJECT_DIR}"
 
 # Install game hook into Batocera user scripts directory

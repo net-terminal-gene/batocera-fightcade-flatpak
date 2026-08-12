@@ -53,6 +53,18 @@ fi
 head_section "Installed scripts"
 # ---------------------------------------------------------------------------
 
+branch_file="${PROJECT_DIR}/.install-branch"
+if [ -f "${branch_file}" ]; then
+    installed_branch=$(tr -d '[:space:]' < "${branch_file}")
+    if [ -n "${installed_branch}" ]; then
+        pass "Installer source branch: ${installed_branch}"
+    else
+        info "Installer source branch: unknown (empty ${branch_file})"
+    fi
+else
+    info "Installer source branch: unknown (re-run install.sh to record)"
+fi
+
 for f in fightcade-roms-sync fightcade-game-hook fightcade-diagnose uninstall.sh install.sh; do
     path="${PROJECT_DIR}/${f}"
     if [ -x "$path" ]; then
