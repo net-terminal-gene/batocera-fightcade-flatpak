@@ -84,4 +84,19 @@ present. Walk through the [Switchres on/off steps](beta-test-checklist.md#switch
 Re-run `/userdata/system/fightcade-flatpak/install.sh` after a Fightcade Flatpak update (Flathub can overwrite
 `xdg-open`; the installer re-applies the patch from `xdg-open.fc-original`).
 
+**Game modes and `fcade://` URLs.** Fightcade uses different URL schemes per mode. The installer
+patch normalizes all game launches to `fcade://play/<emu>/<rom>` when writing `play.pending`:
+
+| Mode | Fightcade URL | CRT |
+|------|---------------|-----|
+| TEST GAME / outgoing online | `fcade://play/...` | Yes |
+| Incoming online challenge | `fcade://served/...` | Yes (normalized) |
+| TRAINING | `fcade://training/...` | Yes (normalized) |
+| REPLAY / LIVE SPECTATING | `fcade://stream/...` | Yes (normalized) |
+
+Non-game URLs (`checkrom`, `autoupdate`, `userstatus`, ...) are not written to `play.pending`.
+
+After testing, confirm dispatch in `/userdata/system/logs/fightcade-crt-switchres.log`
+(`hostd: dispatch fcade://play/...`).
+
 [← Back to main README](../README.md)

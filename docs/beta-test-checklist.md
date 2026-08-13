@@ -226,6 +226,9 @@ create `/userdata/system/configs/fightcade-switchres.disable` or
 When a game starts, the CRT should switch to that game's native resolution. When you
 leave the game, the display should return to lobby / menu timing (e.g. 640×480i).
 
+While testing, watch `/userdata/system/logs/fightcade-crt-switchres.log` for
+`hostd: dispatch fcade://play/<emu>/<rom>` after each mode (training, online, replay, spectate).
+
 #### TEST GAME
 
 - [ ] **TEST GAME** switches display to the game's **native modeline** (resolution + refresh)

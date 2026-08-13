@@ -11,7 +11,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -212,41 +212,9 @@ flatpak_deploy_dir() {
 }
 
 patch_flatpak_xdg_open() {
-    local deploy xdg_open backup wrap
-    deploy=$(flatpak_deploy_dir) || true
-    [ -n "${deploy}" ] || fail "Could not locate Flatpak deploy dir for ${APP_ID}."
-
-    xdg_open="${deploy}/files/bin/xdg-open"
-    backup="${xdg_open}.fc-original"
-    wrap="${PROJECT_DIR}/crt/fightcade-crt-switchres"
-
-    [ -f "${xdg_open}" ] || fail "Flatpak xdg-open not found at ${xdg_open}"
-
-    if [ ! -f "${backup}" ]; then
-        cp -a "${xdg_open}" "${backup}"
-        ok "Backed up Flatpak xdg-open to ${backup}"
-    fi
-
-    cat > "${xdg_open}" <<XDGOPEN
-#!/bin/bash
-# Patched by ${PROJECT_DIR}/install.sh for Batocera CRT Switchres.
-# fcade://play/* writes play.pending for fightcade-crt-hostd; fcade-quark stays in Flatpak.
-
-if [[ "\$1" == fcade://* ]]; then
-  if [[ "\$1" == fcade://play/* ]]; then
-    printf '%s\n' "\$1" > "${PROJECT_DIR}/play.pending"
-  fi
-  exec /app/bin/fcade-quark "\$@"
-fi
-
-if [[ "\$1" =~ ^(http|https):// ]] && [ -x "/app/steamos/bin/min-browser" ]; then
-    /app/steamos/bin/min-browser "\$@"
-    exit 0
-fi
-
-/usr/bin/xdg-open "\$@"
-XDGOPEN
-    chmod 0755 "${xdg_open}"
+    local patch_script="${PROJECT_DIR}/crt/patch-flatpak-xdg-open.sh"
+    [ -x "${patch_script}" ] || fail "xdg-open patch script missing: ${patch_script}"
+    "${patch_script}"
     ok "Patched Flatpak xdg-open for fcade:// Switchres wrapper"
 }
 

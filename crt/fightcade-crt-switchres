@@ -600,6 +600,7 @@ fightcade_refresh_wine_emu_video() {
     disp=$(fightcade_pick_display)
     wid=$(DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1)
     [ -z "$wid" ] && return 0
+    DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
     DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
     DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
     DISPLAY="$disp" xdotool windowsize "$wid" "$w" "$h" 2>/dev/null || true
