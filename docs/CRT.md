@@ -16,48 +16,26 @@ resolution and refresh rate, then restores menu timing when the session ends.
 
 ## Contents
 
-- [Controls and navigation](#controls--navigation)
-  - [Game controller mapping](#game-controller-mapping)
-  - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
+- [Controls (CRT)](#controls-crt)
+- [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
 - [Beta test checklist](beta-test-checklist.md) (session paths, gamepad controls, Switchres on/off)
 - [Recovery](#recovery)
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
 
-## Controls & Navigation
+## Controls (CRT)
 
-> Fightcade is designed to be used with a **keyboard and mouse**, especially for
-> **chat**. This installer adds **gamepad navigation** so you can move the cursor
-> and open menus without a mouse. **Chat still requires a keyboard.**
+Full gamepad layout and Batocera hotkey notes: [Controls & navigation](CONTROLS.md).
+Lobby chat: [Fightcade lobby chat config](LOBBY-CHAT.md).
 
-### Game controller mapping
+On CRT, lobby and menus run at menu timing; in-game pause/resume uses **SELECT + WEST/NORTH**
+as documented in the [context table](CONTROLS.md#context-table).
 
-For other keyboard shortcuts, see
-[Keyboard shortcuts (HD)](../README.md#keyboard-shortcuts-hd) in the README.
-
-**Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
-= emulator menu bar visible at lobby resolution. **Flycast menu** = in-game overlay
-with cursor visible.
-
-Hold **R2** while moving the stick or D-pad for slow cursor movement. **SELECT + R1**
-sends Alt+Tab (cycle EmulationStation, Fightcade, emulator). **A** = left click,
-**B** = right click.
-
-| Where you are | Left Analog/D-pad | + R2 (held) | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
-|---------------|-------------------|-------------|---|---|------------|------------|-------------|
-| **Lobby** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | — | Alt+Tab (cycle windows) |
-| **FBNeo playing** | — | — | — | — | Open Menu | — | — |
-| **FBNeo menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) |
-| **SNES playing** | — | — | — | — | Open Menu | — | — |
-| **SNES menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) |
-| **Flycast playing** | — | — | — | — | Open Menu | Resume game | — |
-| **Flycast menu** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | Open Menu | Resume game | — |
-
-### Keyboard (FBNeo / SNES)
+## Keyboard (FBNeo / SNES)
 
 | Key | Action |
 |-----|--------|
-| **ESC** | Lobby resolution + open emulator menu (same as SELECT + X) |
+| **ESC** | Lobby resolution + open emulator menu (same as SELECT + WEST) |
 | **Alt+Delete** | Resume native resolution (menu may stay open; press **Alt+Enter** to dismiss) |
 
 Exiting the emulator from the menu returns to Fightcade. Launching a new game

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # Map gamepad stick/d-pad to X mouse cursor for Fightcade lobby UI.
-# SELECT+X / SELECT+Y: FBNeo/SNES menu pause/resume (CRT + HD); Flycast menu cursor.
+# SELECT+WEST/NORTH: FBNeo/SNES menu pause/resume (CRT + HD); Flycast menu cursor.
+# SELECT+Start: Alt+F4 quit emulator back to lobby.
+# R1+SOUTH/EAST/WEST/NORTH/R2 (lobby): send chat macros from fightcade-lobby-chat.conf.
 # Pad keyboard leaks (Alt+Enter etc.) are blocked by fightcade-crt-block-pad-kbd.
 #
 # Usage:
@@ -19,6 +21,8 @@ import struct
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 
 try:
     from evdev import InputDevice
@@ -31,6 +35,12 @@ PIDFILE = "/tmp/fightcade-pad-mouse.pid"
 LOCKFILE = "/tmp/fightcade-pad-mouse.lock"
 DISABLE = "/userdata/system/configs/fightcade-pad-mouse.disable"
 CONF = "/userdata/system/configs/fightcade-pad-mouse.conf"
+CHAT_CONF = "/userdata/system/configs/fightcade-lobby-chat.conf"
+CHAT_CONF_LEGACY = "/userdata/system/configs/fightcade-pad-mouse-chat.conf"
+CHAT_CONF_SHIPPED = "/userdata/system/fightcade-flatpak/input/fightcade-lobby-chat.conf"
+ES_INPUT_CFG = "/userdata/system/configs/emulationstation/es_input.cfg"
+ES_LAST_INPUT_CFG = "/userdata/system/configs/emulationstation/es_last_input.cfg"
+ES_INPUT_SYSTEM = "/usr/share/emulationstation/es_input.cfg"
 FBNEO_FLAG = "/tmp/fightcade-fbneo-crt-active"
 FLYCAST_GAME_FLAG = "/tmp/fightcade-flycast-game-active"
 CRT_PAUSEFILE = "/tmp/fightcade-switchres-wrap.pause"
@@ -51,6 +61,7 @@ BTN_WEST = 0x134
 BTN_TR = 0x137
 BTN_TR2 = 0x139
 BTN_SELECT = 0x13A
+BTN_START = 0x13B
 
 WRAP_SCRIPT = "/userdata/system/fightcade-flatpak/crt/fightcade-crt-switchres"
 CURSOR_CTL = "/userdata/system/fightcade-flatpak/input/fightcade-cursor"
@@ -67,6 +78,16 @@ DEFAULTS = {
     "pointer_rescan_sec": 2.0,
     "crt_combo_cooldown_sec": 1,
     "device_match": "",
+    "use_es_input": 1,
+}
+
+CHAT_SLOTS = ("south", "east", "west", "north", "r2")
+DEFAULT_CHAT_MACROS: dict[str, str] = {
+    "south": "ggs!",
+    "east": "wp",
+    "west": "rematch?",
+    "north": "gg",
+    "r2": "nice",
 }
 
 
@@ -101,6 +122,46 @@ def load_conf() -> dict:
     except (OSError, ValueError) as exc:
         log(f"config parse warning: {exc}")
     return cfg
+
+
+def _strip_chat_value(val: str) -> str:
+    val = val.strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+        return val[1:-1]
+    return val
+
+
+def _parse_chat_conf(path: str) -> dict[str, str]:
+    macros: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip().lower()
+                if key in CHAT_SLOTS:
+                    macros[key] = _strip_chat_value(val)
+    except OSError as exc:
+        log(f"chat config parse warning {path}: {exc}")
+    return macros
+
+
+def resolve_chat_conf_path() -> str:
+    for path in (CHAT_CONF, CHAT_CONF_LEGACY, CHAT_CONF_SHIPPED):
+        if os.path.isfile(path):
+            return path
+    return CHAT_CONF
+
+
+def load_chat_macros() -> dict[str, str]:
+    """Lobby chat lines for R1+slot. Empty value in config disables a slot."""
+    macros = dict(DEFAULT_CHAT_MACROS)
+    path = resolve_chat_conf_path()
+    if os.path.isfile(path):
+        macros.update(_parse_chat_conf(path))
+    return {slot: macros[slot] for slot in CHAT_SLOTS if macros.get(slot)}
 
 
 def pick_display() -> str:
@@ -394,6 +455,7 @@ class XdotoolClient:
                 "down) xdotool mousedown \"$a1\" ;; "
                 "up) xdotool mouseup \"$a1\" ;; "
                 'key) xdotool key --clearmodifiers "$a1" ;; '
+                "type) xdotool type --clearmodifiers --delay 12 -- \"$a1\" ;; "
                 "esac; done",
             ],
             stdin=subprocess.PIPE,
@@ -435,6 +497,11 @@ class XdotoolClient:
 
     def key(self, combo: str) -> None:
         self._send(f"key {combo}")
+
+    def type_text(self, text: str) -> None:
+        if not text:
+            return
+        self._send(f"type {text}")
 
     def close(self) -> None:
         if self._proc is None:
@@ -486,6 +553,293 @@ def list_gamepad_event_nodes(device_match: str) -> list[tuple[str, str]]:
     return pads
 
 
+@dataclass
+class PadBindings:
+    """Evdev codes resolved from EmulationStation wizard slots (SOUTH/EAST/…)."""
+
+    btn_left: int = BTN_SOUTH
+    btn_right: int = BTN_EAST
+    btn_combo_west: int = BTN_WEST
+    btn_combo_north: int = BTN_NORTH
+    btn_select: int = BTN_SELECT
+    btn_hotkey: int = -1
+    btn_start: int = BTN_START
+    btn_r1: int = BTN_TR
+    r2_code: int = BTN_TR2
+    r2_is_axis: bool = False
+    abs_x: int = ABS_X
+    abs_y: int = ABS_Y
+    abs_hat_x: int = ABS_HAT0X
+    abs_hat_y: int = ABS_HAT0Y
+    source: str = "evdev-default"
+    es_device: str = ""
+    es_guid: str = ""
+
+    def select_codes(self) -> tuple[int, ...]:
+        codes: list[int] = [self.btn_select]
+        if self.btn_hotkey >= 0 and self.btn_hotkey != self.btn_select:
+            codes.append(self.btn_hotkey)
+        return tuple(codes)
+
+    @property
+    def tracked_abs(self) -> frozenset[int]:
+        codes = {self.abs_x, self.abs_y, self.abs_hat_x, self.abs_hat_y}
+        if self.r2_is_axis:
+            codes.add(self.r2_code)
+        return frozenset(codes)
+
+    def probe_button_names(self) -> dict[int, str]:
+        names = {
+            self.btn_left: "SOUTH → left click; R1+SOUTH lobby chat",
+            self.btn_right: "EAST → right click",
+            self.btn_combo_west: "WEST → SELECT+WEST (pause/menu)",
+            self.btn_combo_north: "NORTH → SELECT+NORTH (resume)",
+            self.btn_r1: "R shoulder → R1+slot lobby chat; SELECT+R1 Alt+Tab",
+            self.btn_select: "SELECT",
+            self.btn_start: "START → SELECT+Start Alt+F4 (quit emulator)",
+        }
+        if self.btn_hotkey >= 0 and self.btn_hotkey not in names:
+            names[self.btn_hotkey] = "HOTKEY (select chord)"
+        if not self.r2_is_axis:
+            names[self.r2_code] = "R2 / slow cursor (button)"
+        return names
+
+
+def sdl2_joystick_guid(bus: int, vendor: int, product: int, version: int) -> str:
+    """Build the same 128-bit GUID string SDL2 / EmulationStation use on Linux."""
+    data = bytearray(16)
+    struct.pack_into("<H", data, 0, bus & 0xFFFF)
+    struct.pack_into("<H", data, 2, 0)
+    struct.pack_into("<H", data, 4, vendor & 0xFFFF)
+    struct.pack_into("<H", data, 6, 0)
+    struct.pack_into("<H", data, 8, product & 0xFFFF)
+    struct.pack_into("<H", data, 10, 0)
+    struct.pack_into("<H", data, 12, version & 0xFFFF)
+    return data.hex()
+
+
+def evdev_device_guid(event_path: str) -> str:
+    if not HAS_EVDEV:
+        return ""
+    try:
+        dev = InputDevice(event_path)
+        info = dev.info
+        dev.close()
+        return sdl2_joystick_guid(info.bustype, info.vendor, info.product, info.version)
+    except OSError as exc:
+        log(f"device GUID read failed {event_path}: {exc}")
+        return ""
+
+
+def parse_es_input_cfg(path: str) -> list[dict]:
+    if not os.path.isfile(path):
+        return []
+    try:
+        tree = ET.parse(path)
+    except (ET.ParseError, OSError) as exc:
+        log(f"es_input parse failed {path}: {exc}")
+        return []
+    configs: list[dict] = []
+    for ic in tree.getroot().findall("inputConfig"):
+        if ic.get("type") != "joystick":
+            continue
+        inputs: dict[str, int] = {}
+        input_types: dict[str, str] = {}
+        for inp in ic.findall("input"):
+            name = inp.get("name")
+            code_s = inp.get("code")
+            if not name or code_s is None:
+                continue
+            try:
+                inputs[name] = int(code_s)
+                input_types[name] = inp.get("type", "button")
+            except ValueError:
+                continue
+        configs.append(
+            {
+                "deviceName": ic.get("deviceName", ""),
+                "deviceGUID": ic.get("deviceGUID", ""),
+                "inputs": inputs,
+                "input_types": input_types,
+            }
+        )
+    return configs
+
+
+def load_es_input_configs() -> dict[str, dict]:
+    """Merge Batocera system presets with userdata; later files override earlier."""
+    by_guid: dict[str, dict] = {}
+    for path in (ES_INPUT_SYSTEM, ES_INPUT_CFG, ES_LAST_INPUT_CFG):
+        for cfg in parse_es_input_cfg(path):
+            guid = (cfg.get("deviceGUID") or "").lower()
+            if guid:
+                by_guid[guid] = cfg
+    return by_guid
+
+
+def axis_triggered(
+    axes: dict[int, int],
+    caps: dict[int, tuple[int, int, int]],
+    code: int,
+    threshold: float = 0.75,
+) -> bool:
+    mn, mx, _flat = caps.get(code, (0, 255, 0))
+    val = axes.get(code, mn)
+    span = mx - mn
+    if span <= 0:
+        return val > 0
+    return (val - mn) / span >= threshold
+
+
+def select_active(bind: PadBindings, keys: dict[int, int]) -> bool:
+    return any(key_down(keys, code) for code in bind.select_codes())
+
+
+def select_modifier_active(bind: PadBindings, keys: dict[int, int]) -> bool:
+    """SELECT or hotkey held (not Start; Start has its own combo)."""
+    return select_active(bind, keys)
+
+
+def start_active(bind: PadBindings, keys: dict[int, int]) -> bool:
+    return bind.btn_start >= 0 and key_down(keys, bind.btn_start)
+
+
+def r1_active(bind: PadBindings, keys: dict[int, int]) -> bool:
+    return key_down(keys, bind.btn_r1)
+
+
+def r2_active(
+    bind: PadBindings,
+    keys: dict[int, int],
+    axes: dict[int, int],
+    caps: dict[int, tuple[int, int, int]],
+) -> bool:
+    if bind.r2_is_axis:
+        return axis_triggered(axes, caps, bind.r2_code)
+    return key_down(keys, bind.r2_code)
+
+
+def es_binding(inputs: dict[str, int], *names: str, default: int) -> int:
+    """First matching ES slot name wins."""
+    for name in names:
+        if name in inputs:
+            return inputs[name]
+    return default
+
+
+# Batocera EmulationStation legacy XML names vs wizard labels (InputConfig.cpp):
+#   a=EAST, b=SOUTH, x=NORTH, y=WEST — not SDL a=south, b=east.
+# Newer ES builds may write south/east/west/north directly; try those first.
+ES_SLOT_LEGACY: dict[str, tuple[str, ...]] = {
+    "south": ("south", "b"),
+    "east": ("east", "a"),
+    "west": ("west", "y"),
+    "north": ("north", "x"),
+}
+
+
+def bindings_from_es_inputs(
+    inputs: dict[str, int],
+    input_types: dict[str, str],
+    device_name: str,
+    device_guid: str,
+) -> PadBindings:
+    # Whatever physical button the user bound to each wizard slot is what we use.
+    b = PadBindings(source="es_input", es_device=device_name, es_guid=device_guid)
+    b.btn_left = es_binding(inputs, *ES_SLOT_LEGACY["south"], default=BTN_SOUTH)
+    b.btn_right = es_binding(inputs, *ES_SLOT_LEGACY["east"], default=BTN_EAST)
+    b.btn_combo_west = es_binding(inputs, *ES_SLOT_LEGACY["west"], default=BTN_WEST)
+    b.btn_combo_north = es_binding(inputs, *ES_SLOT_LEGACY["north"], default=BTN_NORTH)
+    if "select" in inputs:
+        b.btn_select = inputs["select"]
+    if "hotkey" in inputs:
+        b.btn_hotkey = inputs["hotkey"]
+    if "start" in inputs:
+        b.btn_start = inputs["start"]
+    if "pagedown" in inputs:
+        b.btn_r1 = inputs["pagedown"]
+    elif "pageup" in inputs:
+        b.btn_r1 = inputs["pageup"]
+    if "r2" in inputs:
+        if input_types.get("r2") == "axis":
+            b.r2_is_axis = True
+            b.r2_code = inputs["r2"]
+        else:
+            b.r2_code = inputs["r2"]
+    if "joystick1left" in inputs:
+        b.abs_x = inputs["joystick1left"]
+    if "joystick1up" in inputs:
+        b.abs_y = inputs["joystick1up"]
+    return b
+
+
+def resolve_pad_bindings(
+    event_path: str,
+    es_configs_by_guid: dict[str, dict],
+    use_es_input: bool,
+) -> PadBindings:
+    if not use_es_input:
+        return PadBindings()
+    guid = evdev_device_guid(event_path)
+    if not guid:
+        return PadBindings(source="evdev-default (no device GUID)")
+    cfg = es_configs_by_guid.get(guid.lower())
+    if not cfg:
+        return PadBindings(source=f"evdev-default (no profile for {guid})")
+    inputs = cfg.get("inputs", {})
+    if not inputs:
+        return PadBindings(source=f"evdev-default (empty profile for {guid})")
+    return bindings_from_es_inputs(
+        inputs,
+        cfg.get("input_types", {}),
+        cfg.get("deviceName", ""),
+        guid,
+    )
+
+
+def alt_tab_allowed(
+    session: SessionState,
+    allow_mouse: bool,
+    flycast_menu_cursor: bool,
+) -> bool:
+    if not session.fc_running:
+        return False
+    if session.in_lobby or session.crt_paused or flycast_menu_cursor:
+        return True
+    return allow_mouse
+
+
+def alt_f4_allowed(session: SessionState) -> bool:
+    """Quit emulator (Alt+F4) only while a game session is active, not in the lobby."""
+    if not session.fc_running or session.in_lobby:
+        return False
+    return (
+        session.fbneo_running
+        or session.snes9x_running
+        or session.flycast_game_active
+    )
+
+
+def log_pad_bindings(label: str, bindings: PadBindings) -> None:
+    guid_part = f" guid={bindings.es_guid}" if bindings.es_guid else ""
+    log(
+        f"{label}: bindings={bindings.source}"
+        + (f" ({bindings.es_device})" if bindings.es_device else "")
+        + guid_part
+        + f" left={bindings.btn_left:#x} right={bindings.btn_right:#x}"
+        + f" west={bindings.btn_combo_west:#x} north={bindings.btn_combo_north:#x}"
+        + f" SELECT={bindings.btn_select:#x}"
+        + (f" HOTKEY={bindings.btn_hotkey:#x}" if bindings.btn_hotkey >= 0 else "")
+        + f" R1={bindings.btn_r1:#x}"
+        + (
+            f" R2=axis:{bindings.r2_code}"
+            if bindings.r2_is_axis
+            else f" R2={bindings.r2_code:#x}"
+        )
+        + f" stick=({bindings.abs_x},{bindings.abs_y})"
+    )
+
+
 def trigger_crt_esc_pause() -> None:
     if not os.path.isfile(WRAP_SCRIPT):
         return
@@ -516,20 +870,26 @@ def trigger_crt_resume() -> None:
         pass
 
 
-def load_pad_axis_caps(event_path: str) -> dict[int, tuple[int, int, int]]:
+def load_pad_axis_caps(
+    event_path: str,
+    bindings: PadBindings | None = None,
+) -> dict[int, tuple[int, int, int]]:
     """Return ABS code -> (min, max, flat) from the device."""
+    b = bindings or PadBindings()
     defaults = {
-        ABS_X: (-32768, 32767, 0),
-        ABS_Y: (-32768, 32767, 0),
-        ABS_HAT0X: (-1, 1, 0),
-        ABS_HAT0Y: (-1, 1, 0),
+        b.abs_x: (-32768, 32767, 0),
+        b.abs_y: (-32768, 32767, 0),
+        b.abs_hat_x: (-1, 1, 0),
+        b.abs_hat_y: (-1, 1, 0),
     }
+    if b.r2_is_axis:
+        defaults[b.r2_code] = (0, 255, 0)
     if not HAS_EVDEV:
         return defaults
     caps: dict[int, tuple[int, int, int]] = {}
     try:
         dev = InputDevice(event_path)
-        for code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+        for code in b.tracked_abs:
             try:
                 ai = dev.absinfo(code)
             except (OSError, TypeError):
@@ -546,27 +906,29 @@ def load_pad_axis_caps(event_path: str) -> dict[int, tuple[int, int, int]]:
 def initial_axes(
     event_path: str,
     caps: dict[int, tuple[int, int, int]],
+    bindings: PadBindings | None = None,
 ) -> dict[int, int]:
     """Seed stick state from the kernel; evdev does not emit ABS on open."""
+    b = bindings or PadBindings()
     axes: dict[int, int] = {}
     if HAS_EVDEV:
         try:
             dev = InputDevice(event_path)
-            for code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+            for code in b.tracked_abs:
                 try:
                     axes[code] = dev.absinfo(code).value
                 except (OSError, TypeError):
                     mn, mx, _flat = caps.get(code, (0, 0, 0))
-                    axes[code] = int((mn + mx) / 2) if code in (ABS_X, ABS_Y) else 0
+                    axes[code] = int((mn + mx) / 2) if code in (b.abs_x, b.abs_y) else 0
             dev.close()
             return axes
         except OSError as exc:
             log(f"initial axes read failed {event_path}: {exc}")
-    for code in (ABS_X, ABS_Y):
+    for code in (b.abs_x, b.abs_y):
         mn, mx, _flat = caps.get(code, (-32768, 32767, 0))
         axes[code] = int((mn + mx) / 2)
-    axes[ABS_HAT0X] = 0
-    axes[ABS_HAT0Y] = 0
+    axes[b.abs_hat_x] = 0
+    axes[b.abs_hat_y] = 0
     return axes
 
 
@@ -722,7 +1084,76 @@ def set_mouse_button(down: bool, xdotool: XdotoolClient, button: int = 1) -> Non
 
 
 def send_alt_tab(xdotool: XdotoolClient) -> None:
-    xdotool.key("alt+Tab")
+    xdotool.key("Alt_L+Tab")
+
+
+def send_alt_f4(xdotool: XdotoolClient) -> None:
+    xdotool.key("Alt_L+F4")
+
+
+def _fightcade_window_id(display: str) -> str:
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    try:
+        result = subprocess.run(
+            ["xdotool", "search", "--name", "Fightcade"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return ids[-1] if ids else ""
+
+
+def send_lobby_chat_message(display: str, message: str) -> None:
+    """Type message and newline (Electron chat accepts typed \\n, not key Return)."""
+    if not message:
+        return
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    wid = _fightcade_window_id(display)
+    try:
+        type_base = ["xdotool", "type", "--clearmodifiers", "--delay", "12"]
+        if wid:
+            type_base.extend(["--window", wid])
+        subprocess.run(
+            type_base + [message],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+        time.sleep(0.08)
+        subprocess.run(
+            type_base + ["\n"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"lobby chat failed: {exc}")
+
+
+def lobby_chat_button_state(
+    bind: PadBindings,
+    keys: dict[int, int],
+    axes: dict[int, int],
+    caps: dict[int, tuple[int, int, int]],
+) -> dict[str, bool]:
+    return {
+        "south": key_down(keys, bind.btn_left),
+        "east": key_down(keys, bind.btn_right),
+        "west": key_down(keys, bind.btn_combo_west),
+        "north": key_down(keys, bind.btn_combo_north),
+        "r2": r2_active(bind, keys, axes, caps),
+    }
 
 
 def set_cursor_visible(visible: bool, display: str) -> None:
@@ -748,6 +1179,7 @@ def drain_evdev(
     fd: int,
     axes: dict[int, int],
     keys: dict[int, int],
+    tracked_abs: frozenset[int],
 ) -> bool:
     moved = False
     while True:
@@ -760,7 +1192,7 @@ def drain_evdev(
         _sec, _usec, ev_type, code, value = EVENT_STRUCT.unpack(data)
         if ev_type == EV_KEY:
             keys[code] = value
-        elif ev_type == EV_ABS and code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+        elif ev_type == EV_ABS and code in tracked_abs:
             if axes.get(code, 0) != value:
                 moved = True
             axes[code] = value
@@ -798,6 +1230,8 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
         cfg.get("pointer_rescan_sec", DEFAULTS["pointer_rescan_sec"])
     )
     combo_cooldown = max(1, int(cfg["crt_combo_cooldown_sec"]))
+    use_es_input = bool(int(cfg.get("use_es_input", DEFAULTS["use_es_input"])))
+    es_configs_by_guid = load_es_input_configs() if use_es_input else {}
     session = SessionState(
         refresh_sec=refresh_sec, lobby_refresh_sec=lobby_refresh_sec
     )
@@ -806,7 +1240,8 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     event_fds: dict[int, str] = {}
     axes_by_pad: dict[str, dict[int, int]] = {}
     axis_caps_by_pad: dict[str, dict[int, tuple[int, int, int]]] = {}
-    key_state: dict[int, int] = {}
+    keys_by_pad: dict[str, dict[int, int]] = {}
+    bindings_by_pad: dict[str, PadBindings] = {}
     pad_activity: dict[str, float] = {}
 
     labels = ", ".join(p[0] for p in pads)
@@ -818,11 +1253,15 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     last_pointer_rescan = time.time()
 
     try:
-        for _label, event_path in pads:
+        for label, event_path in pads:
+            bindings = resolve_pad_bindings(event_path, es_configs_by_guid, use_es_input)
+            bindings_by_pad[event_path] = bindings
+            log_pad_bindings(label, bindings)
+            keys_by_pad[event_path] = {}
             event_fds[os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)] = event_path
-            axis_caps_by_pad[event_path] = load_pad_axis_caps(event_path)
+            axis_caps_by_pad[event_path] = load_pad_axis_caps(event_path, bindings)
             axes_by_pad[event_path] = initial_axes(
-                event_path, axis_caps_by_pad[event_path]
+                event_path, axis_caps_by_pad[event_path], bindings
             )
     except OSError as exc:
         log(f"open input device failed: {exc}")
@@ -832,13 +1271,18 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     right_held = False
     pause_combo_was_active = False
     resume_combo_was_active = False
-    tab_combo_was_active = False
     last_pause_at = 0.0
     last_resume_at = 0.0
     last_tab_at = 0.0
+    last_alt_f4_at = 0.0
+    last_chat_at = {slot: 0.0 for slot in CHAT_SLOTS}
+    chat_was_down = {slot: False for slot in CHAT_SLOTS}
+    r1_was_down = False
+    start_was_down = False
     cursor_visible = True
     flycast_menu_cursor = False
     select_was_down = False
+    select_modifier_was_down = False
     all_fds = list(event_fds.keys())
 
     try:
@@ -877,23 +1321,33 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             for fd in _r:
                 event_path = event_fds[fd]
                 axes = axes_by_pad[event_path]
-                if drain_evdev(fd, axes, key_state):
+                keys = keys_by_pad[event_path]
+                bindings = bindings_by_pad[event_path]
+                if drain_evdev(fd, axes, keys, bindings.tracked_abs):
                     pad_activity[event_path] = time.time()
 
-            select_down = key_down(key_state, BTN_SELECT)
-            south_down = key_down(key_state, BTN_SOUTH)
-            east_down = key_down(key_state, BTN_EAST)
+            active_path = pick_active_pad(pads, pad_activity)
+            key_state = keys_by_pad[active_path]
+            bind = bindings_by_pad[active_path]
+
+            select_down = select_active(bind, key_state)
+            modifier_down = select_modifier_active(bind, key_state)
+            r1_down = r1_active(bind, key_state)
+            start_down = start_active(bind, key_state)
+            left_down = key_down(key_state, bind.btn_left)
+            right_down = key_down(key_state, bind.btn_right)
+            chat_modifier_down = r1_down and not select_down
             if allow_click:
-                if south_down and not select_down and not left_held:
+                if left_down and not select_down and not chat_modifier_down and not left_held:
                     set_mouse_button(True, xdotool, 1)
                     left_held = True
-                elif (not south_down or select_down) and left_held:
+                elif (not left_down or select_down or chat_modifier_down) and left_held:
                     set_mouse_button(False, xdotool, 1)
                     left_held = False
-                if east_down and not select_down and not right_held:
+                if right_down and not select_down and not chat_modifier_down and not right_held:
                     set_mouse_button(True, xdotool, 3)
                     right_held = True
-                elif (not east_down or select_down) and right_held:
+                elif (not right_down or select_down or chat_modifier_down) and right_held:
                     set_mouse_button(False, xdotool, 3)
                     right_held = False
             else:
@@ -909,7 +1363,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 disable_fake_touchpad_pointers(display)
                 last_pointer_rescan = now
 
-            pause_active = select_down and key_down(key_state, BTN_WEST)
+            pause_active = select_down and key_down(key_state, bind.btn_combo_west)
             if (
                 pause_active
                 and not pause_combo_was_active
@@ -929,7 +1383,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     log("SELECT+X Flycast menu cursor on")
             pause_combo_was_active = pause_active
 
-            resume_active = select_down and key_down(key_state, BTN_NORTH)
+            resume_active = select_down and key_down(key_state, bind.btn_combo_north)
             if (
                 resume_active
                 and not resume_combo_was_active
@@ -950,50 +1404,104 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     log("SELECT+Y Flycast menu cursor off")
             resume_combo_was_active = resume_active
 
+            active_axes = axes_by_pad[active_path]
+            active_caps = axis_caps_by_pad[active_path]
+            r2_down = r2_active(bind, key_state, active_axes, active_caps)
+
             if (
                 session.flycast_combo_available()
                 and select_down
                 and not select_was_down
-                and not key_down(key_state, BTN_WEST)
-                and not key_down(key_state, BTN_NORTH)
-                and not key_down(key_state, BTN_TR)
-                and not key_down(key_state, BTN_TR2)
+                and not key_down(key_state, bind.btn_combo_west)
+                and not key_down(key_state, bind.btn_combo_north)
+                and not r1_down
+                and not r2_down
+                and not start_down
             ):
                 flycast_menu_cursor = True
                 set_cursor_visible(True, display)
                 cursor_visible = True
+            modifier_edge = modifier_down and not select_modifier_was_down
+            select_modifier_was_down = modifier_down
             select_was_down = select_down
+            r1_edge = r1_down and not r1_was_down
 
-            tab_active = select_down and key_down(key_state, BTN_TR)
+            allow_tab = alt_tab_allowed(session, allow_mouse, flycast_menu_cursor)
             if (
-                allow_mouse
-                and tab_active
-                and not tab_combo_was_active
+                allow_tab
+                and modifier_down
+                and r1_down
+                and (r1_edge or modifier_edge)
                 and now - last_tab_at >= combo_cooldown
             ):
                 send_alt_tab(xdotool)
                 last_tab_at = now
                 log("SELECT+R1 sent Alt+Tab")
-            tab_combo_was_active = tab_active
+
+            if (
+                alt_f4_allowed(session)
+                and modifier_down
+                and start_down
+                and (not start_was_down or modifier_edge)
+                and now - last_alt_f4_at >= combo_cooldown
+            ):
+                send_alt_f4(xdotool)
+                last_alt_f4_at = now
+                log("SELECT+Start sent Alt+F4")
+            start_was_down = start_down
+
+            if session.in_lobby and chat_modifier_down:
+                chat_macros = load_chat_macros()
+                chat_buttons = lobby_chat_button_state(
+                    bind, key_state, active_axes, active_caps
+                )
+                for slot in CHAT_SLOTS:
+                    message = chat_macros.get(slot)
+                    down = chat_buttons[slot]
+                    if not message:
+                        chat_was_down[slot] = down
+                        continue
+                    if (
+                        down
+                        and (not chat_was_down[slot] or r1_edge)
+                        and now - last_chat_at[slot] >= combo_cooldown
+                    ):
+                        send_lobby_chat_message(display, message)
+                        last_chat_at[slot] = now
+                        log(f"R1+{slot.upper()} sent chat: {message!r}")
+                    chat_was_down[slot] = down
+            else:
+                for slot in CHAT_SLOTS:
+                    chat_was_down[slot] = False
+            r1_was_down = r1_down
 
             if allow_mouse:
-                event_path = pick_active_pad(pads, pad_activity)
-                axes = axes_by_pad[event_path]
-                caps = axis_caps_by_pad[event_path]
-                x_min, x_max, x_flat = caps.get(ABS_X, (-32768, 32767, 0))
-                y_min, y_max, y_flat = caps.get(ABS_Y, (-32768, 32767, 0))
+                axes = active_axes
+                caps = active_caps
+                x_min, x_max, x_flat = caps.get(bind.abs_x, (-32768, 32767, 0))
+                y_min, y_max, y_flat = caps.get(bind.abs_y, (-32768, 32767, 0))
                 nx = axis_to_float(
-                    axes.get(ABS_X, 0), x_min, x_max, x_flat, deadzone, deadzone_8bit
+                    axes.get(bind.abs_x, 0),
+                    x_min,
+                    x_max,
+                    x_flat,
+                    deadzone,
+                    deadzone_8bit,
                 )
                 ny = axis_to_float(
-                    axes.get(ABS_Y, 0), y_min, y_max, y_flat, deadzone, deadzone_8bit
+                    axes.get(bind.abs_y, 0),
+                    y_min,
+                    y_max,
+                    y_flat,
+                    deadzone,
+                    deadzone_8bit,
                 )
-                fine_nudge = key_down(key_state, BTN_TR2)
+                fine_nudge = r2_active(bind, key_state, axes, caps) and not chat_modifier_down
                 move_speed = slow_speed if fine_nudge else max_speed
                 dx = int(round(nx * move_speed))
                 dy = int(round(ny * move_speed))
-                hx = hat_to_step(axes.get(ABS_HAT0X, 0))
-                hy = hat_to_step(axes.get(ABS_HAT0Y, 0))
+                hx = hat_to_step(axes.get(bind.abs_hat_x, 0))
+                hy = hat_to_step(axes.get(bind.abs_hat_y, 0))
                 step = int(round(move_speed))
                 if hx:
                     dx += hx * step
@@ -1014,14 +1522,51 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
 
 
 def cmd_probe(device_match: str) -> int:
+    print(
+        "NOTE: probe is diagnostic only. It does NOT control Fightcade.\n"
+        "Pad-mouse runs automatically when you launch Fightcade (daemon).\n"
+        "In the Fightcade lobby: stick moves cursor, face buttons click, R2 slows.\n"
+        "R1+SOUTH/EAST/WEST/NORTH/R2 send lobby chat (see fightcade-lobby-chat.conf).\n"
+        "Below: press buttons — names should print (Ctrl+C to quit).\n",
+        flush=True,
+    )
+    cfg = load_conf()
+    use_es_input = bool(int(cfg.get("use_es_input", DEFAULTS["use_es_input"])))
+    es_configs_by_guid = load_es_input_configs() if use_es_input else {}
     pads = list_gamepad_event_nodes(device_match)
     if not pads:
         print("no gamepads found")
         return 1
+    macros = load_chat_macros()
+    if macros:
+        print("Lobby chat macros (R1 + slot):", flush=True)
+        for slot in CHAT_SLOTS:
+            if slot in macros:
+                print(f"  {slot}: {macros[slot]!r}", flush=True)
+        print(flush=True)
     for label, event_path in pads:
-        print(f"{label}: event={event_path}")
-    print("Press buttons for 15s (Ctrl+C to stop early)...")
-    fd = os.open(pads[0][1], os.O_RDONLY)
+        guid = evdev_device_guid(event_path)
+        bindings = resolve_pad_bindings(event_path, es_configs_by_guid, use_es_input)
+        print(f"{label}: event={event_path}", flush=True)
+        print(f"  deviceGUID={guid or '(unknown)'}", flush=True)
+        print(
+            f"  bindings={bindings.source}"
+            + (f" ({bindings.es_device})" if bindings.es_device else ""),
+            flush=True,
+        )
+        for code, name in sorted(bindings.probe_button_names().items()):
+            print(f"    {name}: evdev {code} ({code:#x})", flush=True)
+        print(
+            f"    stick axes: X={bindings.abs_x} Y={bindings.abs_y}"
+            f" hat=({bindings.abs_hat_x},{bindings.abs_hat_y})",
+            flush=True,
+        )
+        if bindings.r2_is_axis:
+            print(f"    R2 slow-cursor axis: {bindings.r2_code}", flush=True)
+    print("Press buttons for 15s (Ctrl+C to stop early)...", flush=True)
+    label, event_path = pads[0]
+    bindings = resolve_pad_bindings(event_path, es_configs_by_guid, use_es_input)
+    fd = os.open(event_path, os.O_RDONLY)
     end = time.time() + 15
     keys: dict[int, int] = {}
     axes: dict[int, int] = {}
@@ -1029,25 +1574,17 @@ def cmd_probe(device_match: str) -> int:
         while time.time() < end:
             _r, _, _ = select.select([fd], [], [], 0.2)
             if _r:
-                drain_evdev(fd, axes, keys)
+                drain_evdev(fd, axes, keys, bindings.tracked_abs)
             moved = []
-            for code in (ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y):
+            for code in bindings.tracked_abs:
                 if code in axes:
                     moved.append(f"{code}={axes[code]}")
             if moved:
-                print("  " + " ".join(moved))
+                print("  " + " ".join(moved), flush=True)
             for code, val in sorted(keys.items()):
                 if val:
-                    name = {
-                        BTN_SOUTH: "BTN_SOUTH(A)",
-                        BTN_EAST: "BTN_EAST(B)",
-                        BTN_WEST: "BTN_WEST(X)",
-                        BTN_NORTH: "BTN_NORTH(Y)",
-                        BTN_TR: "BTN_TR(R1)",
-                        BTN_TR2: "BTN_TR2(R2)",
-                        BTN_SELECT: "BTN_SELECT",
-                    }.get(code, f"code_{code}")
-                    print(f"  {name} ({code}) = {val}")
+                    name = bindings.probe_button_names().get(code, f"code_{code}")
+                    print(f"  {name} ({code}) = {val}", flush=True)
     except KeyboardInterrupt:
         pass
     finally:

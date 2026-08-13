@@ -11,7 +11,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -283,6 +283,32 @@ remove_legacy_duplicates() {
   fi
 }
 
+link_cli_tools() {
+  local pd="$1"
+  mkdir -p /usr/bin
+  ln -sf "${pd}/input/fightcade-pad-mouse" /usr/bin/fightcade-pad-mouse
+  ln -sf "${pd}/input/fightcade-cursor" /usr/bin/fightcade-cursor
+  ln -sf "${pd}/fightcade-diagnose" /usr/bin/fightcade-diagnose
+}
+
+install_chat_config() {
+  local src="${PROJECT_DIR}/input/fightcade-lobby-chat.conf"
+  local dst="/userdata/system/configs/fightcade-lobby-chat.conf"
+  local legacy="/userdata/system/configs/fightcade-pad-mouse-chat.conf"
+  mkdir -p /userdata/system/configs
+  if [ ! -f "${dst}" ]; then
+    if [ -f "${legacy}" ]; then
+      cp -a "${legacy}" "${dst}"
+      ok "Fightcade lobby chat config migrated to ${dst}"
+    else
+      install -m 0644 "${src}" "${dst}"
+      ok "Fightcade lobby chat config installed at ${dst}"
+    fi
+  else
+    ok "Fightcade lobby chat config: ${dst} (unchanged)"
+  fi
+}
+
 stop_legacy_crt_watch() {
     local legacy="${PROJECT_DIR}/fightcade-crt-watch"
     if [ -x "${legacy}" ]; then
@@ -462,6 +488,8 @@ for file in ${FILES}; do
     install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
 done
 record_install_branch
+link_cli_tools "${PROJECT_DIR}"
+install_chat_config
 ok "Scripts installed to ${PROJECT_DIR}"
 
 # Install game hook into Batocera user scripts directory

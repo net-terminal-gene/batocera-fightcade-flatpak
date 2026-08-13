@@ -67,8 +67,8 @@ curl -fsSL \
 
 ## Gamepad and menu controls (all testers)
 
-Full mapping tables: [README controls](../README.md#controls--navigation) ·
-[CRT controls](CRT.md#controls--navigation). Test on **HD** and **CRT** where you
+Full mapping tables: [Controls](../CONTROLS.md) ·
+[CRT keyboard notes](CRT.md#keyboard-fbneo--snes). Test on **HD** and **CRT** where you
 run each mode below.
 
 Chat still needs a keyboard. If gamepad navigation does nothing, check
