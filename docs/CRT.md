@@ -39,15 +39,19 @@ For other keyboard shortcuts, see
 = emulator menu bar visible at lobby resolution. **Flycast menu** = in-game overlay
 with cursor visible.
 
-| Where you are | Left Analog/D-pad | Left Analog/D-pad + R2 | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
-|---------------|-------------------|------------------------|---|---|------------|------------|-------------|
-| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
+Hold **R2** while moving the stick or D-pad for slow cursor movement. **SELECT + R1**
+sends Alt+Tab (cycle EmulationStation, Fightcade, emulator). **A** = left click,
+**B** = right click.
+
+| Where you are | Left Analog/D-pad | + R2 (held) | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
+|---------------|-------------------|-------------|---|---|------------|------------|-------------|
+| **Lobby** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | — | Alt+Tab (cycle windows) |
 | **FBNeo playing** | — | — | — | — | Open Menu | — | — |
-| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **FBNeo menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) |
 | **SNES playing** | — | — | — | — | Open Menu | — | — |
-| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **SNES menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) |
 | **Flycast playing** | — | — | — | — | Open Menu | Resume game | — |
-| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | Open Menu | Resume game | — |
+| **Flycast menu** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | Open Menu | Resume game | — |
 
 ### Keyboard (FBNeo / SNES)
 

@@ -220,18 +220,26 @@ Or re-run the full installer; it is safe on an existing install.
 **Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
 = emulator menu bar visible. **Flycast menu** = in-game overlay with cursor visible.
 
+**Cursor speed:** move the stick or D-pad normally for fast cursor movement. Hold **R2**
+while moving the stick or D-pad for slow, precise movement (lobby and emulator menus).
+
+**Clicks:** **A** = left click, **B** = right click (challenge flow, context menus).
+
+**Window focus:** **SELECT + R1** sends Alt+Tab to cycle EmulationStation, Fightcade,
+and any open emulator window.
+
 To challenge someone in a room: **B** (right click) on their name, then **A** (left click)
 **Challenge**.
 
-| Where you are | Left Analog/D-pad | Left Analog/D-pad + R2 | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
-|---------------|-------------------|------------------------|---|---|------------|------------|-------------|
-| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
+| Where you are | Left Analog/D-pad | + R2 (held) | A | B | SELECT + X | SELECT + Y | SELECT + R1 |
+|---------------|-------------------|-------------|---|---|------------|------------|-------------|
+| **Lobby** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | — | Alt+Tab (cycle windows) |
 | **FBNeo playing** | — | — | — | — | Open FBNeo menu (ESC) | — | — |
-| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
+| **FBNeo menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) |
 | **SNES playing** | — | — | — | — | Open Snes9x menu (ESC) | — | — |
-| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **Flycast playing** | — | — | — | — | Open Menu | Resume game | — |
-| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Right Click | Open Menu | Resume game | — |
+| **SNES menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) |
+| **Flycast playing** | — | — | — | — | Open menu | Resume game | — |
+| **Flycast menu** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | Open menu | Resume game | — |
 
 ### Keyboard shortcuts (HD)
 
