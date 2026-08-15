@@ -9,6 +9,7 @@
 
 - [Game controller mapping](#game-controller-mapping)
 - [Batocera hotkeys (SELECT)](#batocera-hotkeys-select)
+- [Emulator menus (FBNeo / SNES)](#emulator-menus-fbneo--snes)
 - [Context table](#context-table)
 - [Keyboard shortcuts (HD)](#keyboard-shortcuts-hd)
 
@@ -70,6 +71,30 @@ does not change; only which physical button you assign to each slot changes.
 alone while moving the stick or D-pad for slow, precise movement (lobby and emulator menus).
 
 **Clicks:** **SOUTH** = left click, **EAST** = right click (challenge flow, context menus).
+
+### Emulator menus (FBNeo / SNES)
+
+**SELECT + WEST** opens the emulator menu (sends **ESC**). On **CRT** with Switchres
+active, the display returns to lobby / menu timing while the menu is open and the
+pad cursor is shown. **SELECT + NORTH** resumes the game (CRT: restores the game's
+native modeline and dismisses the menu).
+
+| Action | Combo |
+|--------|--------|
+| Move cursor | Stick / D-pad (hold **R2** alone for slow movement) |
+| Left / right click | **SOUTH** / **EAST** |
+| Resume game | **SELECT + NORTH** |
+| Cycle windows | **SELECT + right shoulder** (Alt+Tab) |
+| Quit to Fightcade lobby | **SELECT + Start** (Alt+F4) |
+
+**Menu bar** items (File, Input, Game, and so on) receive clicks on the main emulator
+window.
+
+**Modal dialogs** (for example **Input → Map game inputs**) are separate Wine windows
+on top of the menu. The installer detects the dialog under the pointer, raises only
+that surface, and sends the click to the control under the cursor (**OK**, **Cancel**,
+or a list row). You should not need a keyboard or Alt+Tab to close **Map game inputs**
+with **SOUTH** on **OK**.
 
 **Window focus:** **SELECT + right shoulder** sends Alt+Tab to cycle EmulationStation, Fightcade,
 and any open emulator window.

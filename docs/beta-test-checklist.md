@@ -95,6 +95,8 @@ Chat still needs a keyboard. If gamepad navigation does nothing, check
 - [ ] Stick / D-pad + **R2** move the menu cursor (fast / slow)
 - [ ] **A** = left click in the menu
 - [ ] **B** = right click in the menu
+- [ ] **Input → Map game inputs** opens; **A** on **OK** closes the dialog (no keyboard or Alt+Tab)
+- [ ] **Input → Exit Emulator** returns to the Fightcade lobby
 - [ ] **SELECT + Y** resumes the game and hides the menu cursor
 - [ ] On **CRT** with Switchres active: display returns to the game's **native modeline** after resume
 - [ ] **SELECT + R1** cycles window focus

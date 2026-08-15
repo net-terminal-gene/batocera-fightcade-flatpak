@@ -1061,6 +1061,8 @@ fightcade_emergency_recover() {
 fightcade_crt_esc_pause() {
     local emu=""
 
+    crt_is_paused && return 0
+
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
         . "$STATEFILE"

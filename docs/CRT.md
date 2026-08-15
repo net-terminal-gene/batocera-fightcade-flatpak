@@ -31,6 +31,10 @@ Lobby chat: [Fightcade lobby chat config](LOBBY-CHAT.md).
 On CRT, lobby and menus run at menu timing; in-game pause/resume uses **SELECT + WEST/NORTH**
 as documented in the [context table](CONTROLS.md#context-table).
 
+**FBNeo / SNES menu cursor:** Stick, D-pad, **SOUTH** / **EAST**, and modal dialogs
+(for example **Input → Map game inputs**) are covered in
+[Controls — Emulator menus](CONTROLS.md#emulator-menus-fbneo--snes).
+
 ## Keyboard (FBNeo / SNES)
 
 | Key | Action |

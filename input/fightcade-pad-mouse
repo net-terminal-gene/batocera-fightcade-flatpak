@@ -33,6 +33,7 @@ except ImportError:
 
 PIDFILE = "/tmp/fightcade-pad-mouse.pid"
 LOCKFILE = "/tmp/fightcade-pad-mouse.lock"
+LOGFILE = "/tmp/pad-mouse.log"
 DISABLE = "/userdata/system/configs/fightcade-pad-mouse.disable"
 CONF = "/userdata/system/configs/fightcade-pad-mouse.conf"
 CHAT_CONF = "/userdata/system/configs/fightcade-lobby-chat.conf"
@@ -96,9 +97,14 @@ DEFAULT_CHAT_MACROS: dict[str, str] = {
 
 
 def log(msg: str) -> None:
-    if os.environ.get("FIGHTCADE_PAD_MOUSE_QUIET"):
-        return
-    sys.stderr.write(f"fightcade-pad-mouse: {msg}\n")
+    line = f"fightcade-pad-mouse: {msg}\n"
+    if not os.environ.get("FIGHTCADE_PAD_MOUSE_QUIET"):
+        sys.stderr.write(line)
+    try:
+        with open(LOGFILE, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        pass
 
 
 def load_conf() -> dict:
@@ -279,6 +285,314 @@ def read_focused_window_name(display: str) -> str:
     return ""
 
 
+def xdotool_first_window_by_name(display: str, pattern: str) -> str:
+    if not pattern:
+        return ""
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "search", "--name", pattern],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return ""
+        for wid in out.stdout.split():
+            wid = wid.strip()
+            if wid:
+                return wid
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def activate_x_window(display: str, wid: str) -> None:
+    if not wid:
+        return
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        subprocess.run(
+            ["xdotool", "windowactivate", wid],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+        subprocess.run(
+            ["xdotool", "windowraise", wid],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def focus_wine_menu_emulator(display: str) -> bool:
+    if fightcade_fbneo_running():
+        pattern = "FBNeo"
+    elif fightcade_snes9x_running():
+        pattern = "Snes9x"
+    else:
+        return False
+    wid = xdotool_first_window_by_name(display, pattern)
+    if not wid:
+        return False
+    activate_x_window(display, wid)
+    return True
+
+
+def focus_flycast_window(display: str) -> bool:
+    wid = xdotool_first_window_by_name(display, "flycast")
+    if not wid:
+        return False
+    activate_x_window(display, wid)
+    return True
+
+
+def focus_menu_target(
+    display: str,
+    crt_paused: bool,
+    flycast_menu_cursor: bool,
+) -> bool:
+    if flycast_menu_cursor:
+        return focus_flycast_window(display)
+    if crt_paused:
+        return focus_wine_menu_emulator(display)
+    return False
+
+
+def menu_target_window_id(
+    display: str,
+    crt_paused: bool,
+    flycast_menu_cursor: bool,
+) -> str:
+    if flycast_menu_cursor:
+        return xdotool_first_window_by_name(display, "flycast")
+    if crt_paused:
+        if fightcade_fbneo_running():
+            return xdotool_first_window_by_name(display, "FBNeo")
+        if fightcade_snes9x_running():
+            return xdotool_first_window_by_name(display, "Snes9x")
+    return ""
+
+
+_RE_WIN_POS = re.compile(r"Position:\s*(\d+),(\d+)")
+_RE_WIN_GEOM = re.compile(r"Geometry:\s*(\d+)x(\d+)")
+
+
+def window_under_cursor(display: str) -> str:
+    """X window at pointer (Wine modals/dialog buttons are separate from main emu)."""
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "getmouselocation", "--shell"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return ""
+        for line in out.stdout.splitlines():
+            if line.startswith("WINDOW="):
+                wid = line.split("=", 1)[1].strip()
+                if wid and wid != "0":
+                    return wid
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def pointer_xy(display: str) -> tuple[int, int]:
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "getmouselocation", "--shell"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return 0, 0
+        coords: dict[str, str] = {}
+        for line in out.stdout.splitlines():
+            if "=" in line:
+                key, val = line.split("=", 1)
+                coords[key.strip()] = val.strip()
+        return int(coords.get("X", "0")), int(coords.get("Y", "0"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0, 0
+
+
+def xdotool_window_geometry(display: str, wid: str) -> tuple[int, int, int, int]:
+    if not wid:
+        return 0, 0, 0, 0
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "getwindowgeometry", wid],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return 0, 0, 0, 0
+        pos = _RE_WIN_POS.search(out.stdout)
+        geom = _RE_WIN_GEOM.search(out.stdout)
+        if not pos or not geom:
+            return 0, 0, 0, 0
+        return (
+            int(pos.group(1)),
+            int(pos.group(2)),
+            int(geom.group(1)),
+            int(geom.group(2)),
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0, 0, 0, 0
+
+
+def xdotool_window_pid(display: str, wid: str) -> int:
+    if not wid:
+        return 0
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "getwindowpid", wid],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return 0
+        return int(out.stdout.strip() or "0")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
+def xdotool_windows_for_pid(display: str, pid: int) -> frozenset[str]:
+    if pid <= 0:
+        return frozenset()
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "search", "--pid", str(pid)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return frozenset()
+        return frozenset(w.strip() for w in out.stdout.split() if w.strip())
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+
+
+def emu_window_at_pointer(display: str, menu_wid: str) -> str:
+    """Smallest Wine emu window containing the pointer (OK button beats dialog beats main)."""
+    x, y = pointer_xy(display)
+    menu_pid = xdotool_window_pid(display, menu_wid)
+    if menu_pid <= 0:
+        return menu_wid
+    best_wid = menu_wid
+    best_area = 2**62
+    for wid in xdotool_windows_for_pid(display, menu_pid):
+        gx, gy, gw, gh = xdotool_window_geometry(display, wid)
+        if gw <= 0 or gh <= 0:
+            continue
+        if gx <= x < gx + gw and gy <= y < gy + gh:
+            area = gw * gh
+            if area < best_area:
+                best_area = area
+                best_wid = wid
+    return best_wid
+
+
+def wine_dialog_shell_at_pointer(display: str, menu_wid: str) -> str:
+    """Modal dialog surface under the pointer (not OK/Cancel strips or main emu)."""
+    x, y = pointer_xy(display)
+    menu_pid = xdotool_window_pid(display, menu_wid)
+    if menu_pid <= 0:
+        return ""
+    _, _, main_w, main_h = xdotool_window_geometry(display, menu_wid)
+    main_area = main_w * main_h
+    best = ""
+    best_area = 0
+    for wid in xdotool_windows_for_pid(display, menu_pid):
+        if wid == menu_wid:
+            continue
+        gx, gy, gw, gh = xdotool_window_geometry(display, wid)
+        if gw < 80 or gh < 80:
+            continue
+        if not (gx <= x < gx + gw and gy <= y < gy + gh):
+            continue
+        area = gw * gh
+        if main_area > 0 and area >= main_area:
+            continue
+        if area > best_area:
+            best_area = area
+            best = wid
+    return best
+
+
+def raise_wine_dialog_for_click(display: str, menu_wid: str) -> None:
+    """Raise only the modal shell before a child-surface click; never touch main emu."""
+    dialog_wid = wine_dialog_shell_at_pointer(display, menu_wid)
+    if not dialog_wid:
+        prime_x_pointer(display)
+        return
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        for args in (["windowactivate", dialog_wid], ["windowraise", dialog_wid]):
+            subprocess.run(
+                ["xdotool", *args],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                check=False,
+            )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    prime_x_pointer(display)
+
+
+def resolve_menu_click(
+    display: str,
+    crt_paused: bool,
+    flycast_menu_cursor: bool,
+) -> tuple[str, str]:
+    """(click_window, menu_window) for menu-mode pointer clicks."""
+    menu_wid = menu_target_window_id(display, crt_paused, flycast_menu_cursor)
+    if not menu_wid:
+        return window_under_cursor(display), ""
+    return emu_window_at_pointer(display, menu_wid), menu_wid
+
+
+def menu_click_window_id(
+    display: str,
+    crt_paused: bool,
+    flycast_menu_cursor: bool,
+) -> str:
+    click_wid, _menu_wid = resolve_menu_click(display, crt_paused, flycast_menu_cursor)
+    return click_wid
+
+
 def fightcade_flycast_running() -> bool:
     return pgrep_running(FLYCAST_PGREP_RE)
 
@@ -344,7 +658,7 @@ class SessionState:
     running, refresh() must NOT call xdotool getwindowfocus, wmctrl, or
     set_cursor_visible. Those contend with the 60Hz stick→xdotool mouse path and
     make lobby navigation slow/jittery. Full focus polling is only for in-game CRT
-    combos (SELECT+X/Y, Flycast cursor). Do not "simplify" by always polling focus.
+    combos (SELECT+WEST/NORTH, Flycast cursor). Do not "simplify" by always polling focus.
     """
 
     def __init__(self, refresh_sec: float = 0.25, lobby_refresh_sec: float = 2.0) -> None:
@@ -372,6 +686,9 @@ class SessionState:
 
         if not force and now - self.last_lobby_refresh < self.lobby_refresh_sec:
             if self.in_lobby and not self.crt_paused:
+                return
+            if self.crt_paused:
+                self.in_lobby = False
                 return
 
         procs = scan_fightcade_processes()
@@ -415,7 +732,8 @@ class SessionState:
                     os.remove(FLYCAST_GAME_FLAG)
                 except OSError:
                     pass
-        self.focus_name = read_focused_window_name(display)
+        if not self.crt_paused:
+            self.focus_name = read_focused_window_name(display)
 
     def lobby_mouse_allowed(self, flycast_menu_cursor: bool) -> bool:
         if self.crt_paused or flycast_menu_cursor:
@@ -427,13 +745,15 @@ class SessionState:
         return True
 
     def wine_menu_emu_combo_available(self) -> bool:
+        if fightcade_fbneo_running() or fightcade_snes9x_running():
+            return True
         return wine_menu_emu_in_focus(self.focus_name) is not None
 
     def fbneo_combo_available(self) -> bool:
         return self.wine_menu_emu_combo_available()
 
     def flycast_combo_available(self) -> bool:
-        return self.flycast_game_active and "flycast" in self.focus_name.lower()
+        return self.flycast_game_active
 
 
 class XdotoolClient:
@@ -458,6 +778,9 @@ class XdotoolClient:
                 "move) xdotool mousemove_relative -- \"$a1\" \"$a2\" ;; "
                 "down) xdotool mousedown \"$a1\" ;; "
                 "up) xdotool mouseup \"$a1\" ;; "
+                "wdown) xdotool mousedown --window \"$a1\" \"$a2\" ;; "
+                "wup) xdotool mouseup --window \"$a1\" \"$a2\" ;; "
+                'click) xdotool click --clearmodifiers "$a1" ;; '
                 'key) xdotool key --clearmodifiers "$a1" ;; '
                 "type) xdotool type --clearmodifiers --delay 12 -- \"$a1\" ;; "
                 "esac; done",
@@ -490,8 +813,14 @@ class XdotoolClient:
             return
         self._send(f"move {dx} {dy}")
 
-    def mouse_button(self, button: int, down: bool) -> None:
-        self._send(f"{'down' if down else 'up'} {button}")
+    def mouse_button(self, button: int, down: bool, window: str = "") -> None:
+        if window:
+            self._send(f"{'wdown' if down else 'wup'} {window} {button}")
+        else:
+            self._send(f"{'down' if down else 'up'} {button}")
+
+    def click(self, button: int = 1) -> None:
+        self._send(f"click {button}")
 
     def mouse_down(self) -> None:
         self.mouse_button(1, True)
@@ -754,6 +1083,32 @@ def r2_active(
         if not is_axis and key_down(keys, code):
             return True
     return False
+
+
+def r2_slow_nudge(
+    bind: PadBindings,
+    keys: dict[int, int],
+    axes: dict[int, int],
+    caps: dict[int, tuple[int, int, int]],
+) -> bool:
+    """Slow cursor only when R2 is held alone (no face buttons, select, etc.)."""
+    if not r2_active(bind, keys, axes, caps):
+        return False
+    for code in (
+        bind.btn_left,
+        bind.btn_right,
+        bind.btn_combo_west,
+        bind.btn_combo_north,
+        bind.btn_select,
+        bind.btn_start,
+        bind.btn_r1,
+    ):
+        if code >= 0 and key_down(keys, code):
+            return False
+    if bind.btn_hotkey >= 0 and bind.btn_hotkey != bind.btn_select:
+        if key_down(keys, bind.btn_hotkey):
+            return False
+    return True
 
 
 def es_binding(inputs: dict[str, int], *names: str, default: int) -> int:
@@ -1242,8 +1597,13 @@ def move_mouse(dx: int, dy: int, xdotool: XdotoolClient) -> None:
     xdotool.move(dx, dy)
 
 
-def set_mouse_button(down: bool, xdotool: XdotoolClient, button: int = 1) -> None:
-    xdotool.mouse_button(button, down)
+def set_mouse_button(
+    down: bool,
+    xdotool: XdotoolClient,
+    button: int = 1,
+    window: str = "",
+) -> None:
+    xdotool.mouse_button(button, down, window)
 
 
 def send_alt_tab(xdotool: XdotoolClient) -> None:
@@ -1408,7 +1768,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     pad_activity: dict[str, float] = {}
 
     labels = ", ".join(p[0] for p in pads)
-    log(f"gamepads: {labels} on DISPLAY={display} (SELECT+X pause, SELECT+Y resume)")
+    log(f"gamepads: {labels} on DISPLAY={display} (SELECT+WEST pause, SELECT+NORTH resume)")
     disable_fake_touchpad_pointers(display)
     prime_x_pointer(display)
     set_cursor_visible(True, display)
@@ -1432,6 +1792,8 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
 
     left_held = False
     right_held = False
+    left_click_window = ""
+    right_click_window = ""
     pause_combo_was_active = False
     resume_combo_was_active = False
     last_pause_at = 0.0
@@ -1446,11 +1808,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     flycast_menu_cursor = False
     select_was_down = False
     select_modifier_was_down = False
+    emu_menu_open = False
     all_fds = list(event_fds.keys())
 
     try:
         while True:
             session.refresh(display)
+            if not crt_paused() and not flycast_menu_cursor:
+                emu_menu_open = False
             if os.path.isfile(DISABLE) or not session.fc_running:
                 if left_held:
                     set_mouse_button(False, xdotool, 1)
@@ -1472,9 +1837,13 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 # Skip cursor hide/show and focus checks; lobby mouse is always on.
                 allow_mouse = True
                 allow_click = True
+            elif crt_paused() or flycast_menu_cursor:
+                allow_mouse = True
+                allow_click = True
             else:
                 allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
                 allow_click = allow_mouse
+            if not session.in_lobby:
                 want_cursor = allow_mouse
                 if want_cursor != cursor_visible:
                     set_cursor_visible(want_cursor, display)
@@ -1500,28 +1869,52 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             left_down = key_down(key_state, bind.btn_left)
             right_down = key_down(key_state, bind.btn_right)
             chat_modifier_down = r1_down and not select_down
+            now = time.time()
+            menu_mode = session.crt_paused or flycast_menu_cursor
+
             if allow_click:
                 if left_down and not select_down and not chat_modifier_down and not left_held:
-                    set_mouse_button(True, xdotool, 1)
+                    if menu_mode:
+                        click_wid, menu_wid = resolve_menu_click(
+                            display, session.crt_paused, flycast_menu_cursor
+                        )
+                        if menu_wid and click_wid and click_wid != menu_wid:
+                            raise_wine_dialog_for_click(display, menu_wid)
+                    else:
+                        click_wid = ""
+                    set_mouse_button(True, xdotool, 1, click_wid)
+                    left_click_window = click_wid
                     left_held = True
                 elif (not left_down or select_down or chat_modifier_down) and left_held:
-                    set_mouse_button(False, xdotool, 1)
+                    set_mouse_button(False, xdotool, 1, left_click_window)
                     left_held = False
+                    left_click_window = ""
                 if right_down and not select_down and not chat_modifier_down and not right_held:
-                    set_mouse_button(True, xdotool, 3)
+                    if menu_mode:
+                        click_wid, menu_wid = resolve_menu_click(
+                            display, session.crt_paused, flycast_menu_cursor
+                        )
+                        if menu_wid and click_wid and click_wid != menu_wid:
+                            raise_wine_dialog_for_click(display, menu_wid)
+                    else:
+                        click_wid = ""
+                    set_mouse_button(True, xdotool, 3, click_wid)
+                    right_click_window = click_wid
                     right_held = True
                 elif (not right_down or select_down or chat_modifier_down) and right_held:
-                    set_mouse_button(False, xdotool, 3)
+                    set_mouse_button(False, xdotool, 3, right_click_window)
                     right_held = False
+                    right_click_window = ""
             else:
                 if left_held:
-                    set_mouse_button(False, xdotool, 1)
+                    set_mouse_button(False, xdotool, 1, left_click_window)
                     left_held = False
+                    left_click_window = ""
                 if right_held:
-                    set_mouse_button(False, xdotool, 3)
+                    set_mouse_button(False, xdotool, 3, right_click_window)
                     right_held = False
+                    right_click_window = ""
 
-            now = time.time()
             if session.in_lobby and now - last_pointer_rescan >= pointer_rescan_sec:
                 disable_fake_touchpad_pointers(display)
                 last_pointer_rescan = now
@@ -1532,18 +1925,31 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and not pause_combo_was_active
                 and now - last_pause_at >= combo_cooldown
             ):
-                if session.fbneo_combo_available():
+                session.refresh(display, force=True)
+                if (
+                    session.fbneo_combo_available()
+                    and not session.crt_paused
+                    and not crt_paused()
+                    and not emu_menu_open
+                ):
+                    emu_menu_open = True
                     trigger_crt_esc_pause()
+                    session.refresh(display, force=True)
+                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                    allow_click = allow_mouse
                     last_pause_at = now
                     set_cursor_visible(True, display)
                     cursor_visible = True
-                    log("SELECT+X triggered CRT pause (ESC)")
-                elif session.flycast_combo_available():
+                    log("SELECT+WEST opened emulator menu (ESC)")
+                elif session.flycast_combo_available() and not flycast_menu_cursor:
                     flycast_menu_cursor = True
+                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                    allow_click = allow_mouse
                     last_pause_at = now
                     set_cursor_visible(True, display)
                     cursor_visible = True
-                    log("SELECT+X Flycast menu cursor on")
+                    focus_flycast_window(display)
+                    log("SELECT+WEST Flycast menu cursor on")
             pause_combo_was_active = pause_active
 
             resume_active = select_down and key_down(key_state, bind.btn_combo_north)
@@ -1552,19 +1958,26 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and not resume_combo_was_active
                 and now - last_resume_at >= combo_cooldown
             ):
+                session.refresh(display, force=True)
                 if session.fbneo_combo_available():
+                    emu_menu_open = False
                     trigger_crt_resume()
+                    session.refresh(display, force=True)
+                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                    allow_click = allow_mouse
                     last_resume_at = now
                     set_cursor_visible(False, display)
                     cursor_visible = False
-                    log("SELECT+Y triggered CRT resume")
-                elif session.flycast_combo_available():
+                    log("SELECT+NORTH closed emulator menu (resume)")
+                elif session.flycast_combo_available() and flycast_menu_cursor:
                     flycast_menu_cursor = False
                     clear_crt_pause()
+                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                    allow_click = allow_mouse
                     last_resume_at = now
                     set_cursor_visible(False, display)
                     cursor_visible = False
-                    log("SELECT+Y Flycast menu cursor off")
+                    log("SELECT+NORTH Flycast menu cursor off")
             resume_combo_was_active = resume_active
 
             active_axes = axes_by_pad[active_path]
@@ -1582,8 +1995,11 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and not start_down
             ):
                 flycast_menu_cursor = True
+                allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                allow_click = allow_mouse
                 set_cursor_visible(True, display)
                 cursor_visible = True
+                focus_flycast_window(display)
             modifier_edge = modifier_down and not select_modifier_was_down
             select_modifier_was_down = modifier_down
             select_was_down = select_down
@@ -1659,7 +2075,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     deadzone,
                     deadzone_8bit,
                 )
-                fine_nudge = r2_active(bind, key_state, axes, caps) and not chat_modifier_down
+                fine_nudge = r2_slow_nudge(bind, key_state, axes, caps) and not chat_modifier_down
                 move_speed = slow_speed if fine_nudge else max_speed
                 dx = int(round(nx * move_speed))
                 dy = int(round(ny * move_speed))
@@ -1673,9 +2089,9 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 move_mouse(dx, dy, xdotool)
     finally:
         if left_held:
-            set_mouse_button(False, xdotool, 1)
+            set_mouse_button(False, xdotool, 1, left_click_window)
         if right_held:
-            set_mouse_button(False, xdotool, 3)
+            set_mouse_button(False, xdotool, 3, right_click_window)
         xdotool.close()
         for fd in all_fds:
             try:
