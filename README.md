@@ -153,7 +153,6 @@ When a source directory does not exist, an empty real directory is created inste
 |---------|--------------|
 | `/userdata/system/fightcade-flatpak/fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks |
 | `/userdata/system/fightcade-flatpak/hd/patch-hd-video.sh` | Apply HD fullscreen, aspect, and vsync defaults (see [HD.md](docs/HD.md)) |
-| `/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse probe` | Show resolved ES slot bindings for connected gamepads (diagnostic only) |
 | `/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse status` | Show whether the pad-mouse daemon is running |
 | `/userdata/system/fightcade-flatpak/fightcade-diagnose` | Print install state, link health, and artwork / patch status |
 | `/userdata/system/fightcade-flatpak/uninstall.sh` | Remove links, hook, overrides, xdg-open patch, and scripts (ROMs and Flatpak untouched) |

@@ -15,8 +15,14 @@
 ## Game controller mapping
 
 Fightcade gamepad controls use the same layout as **EmulationStation**. On a fresh
-Batocera install with a common controller (Xbox, PlayStation, 8BitDo, and similar),
-you can navigate Fightcade immediately with no extra setup.
+Batocera install with a common controller (Xbox, PlayStation, Nintendo Switch Pro,
+8BitDo, and similar), plug in the pad, launch Fightcade, and use it. If the pad
+already works in EmulationStation menus, it should work in the Fightcade lobby with
+no extra setup.
+
+**If a button does the wrong thing** (wrong click, R2 does nothing, and so on), map
+the pad once in **System Settings → ES Controller Mapping**, then quit and relaunch
+Fightcade. Fightcade reads the same slot layout Batocera saves for that controller.
 
 **The label printed on the plastic does not matter.** Only which **slot** you
 assigned matters: **SOUTH**, **EAST**, **NORTH**, **WEST**, and the rest. If you
@@ -45,8 +51,9 @@ Fightcade lobby controls use the same assignments.
 
 ### ES Controller Mapping (optional)
 
-Open **System Settings → ES Controller Mapping** only if you want to change the
-stock layout, for example:
+Open **System Settings → ES Controller Mapping** when you want to change the
+stock layout, or when Fightcade does not match how the pad behaves in
+EmulationStation:
 
 - Accessibility (move a slot to a different physical button)
 - Fight sticks or unusual button layouts
@@ -72,8 +79,6 @@ Fightcade lobby (while a game is running).
 
 To challenge someone in a room: **EAST** (right click) on their name, then **SOUTH** (left click)
 **Challenge**.
-
-Diagnostic: `/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse probe`
 
 ## Batocera hotkeys (SELECT)
 

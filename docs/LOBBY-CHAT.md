@@ -123,18 +123,10 @@ Restart Fightcade so `fightcade-pad-mouse` reloads the file:
 
 ## Troubleshooting
 
-**Verify bindings and loaded macros** (diagnostic only; does not control Fightcade):
-
-```bash
-/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse probe
-```
-
-Look for `Lobby chat macros (R1 + slot):` and your messages.
-
 | Problem | Check |
 |---------|--------|
-| Nothing sent | Chat input focused? Are you in the **lobby**? Hold **R1** first, then tap the slot. |
-| Wrong button | Run `probe`; slot names follow ES mapping, not plastic labels. |
+| Nothing sent | Chat input focused? Are you in the **lobby**? Hold **R1** first, then tap the slot (not SELECT). |
+| Wrong button | Slot names follow **ES Controller Mapping**, not plastic labels. Remap in ES if needed. |
 | Old messages after edit | Restart Fightcade or pad-mouse (see above). |
 | Config missing | Re-run `/userdata/system/fightcade-flatpak/install.sh`; first install creates the file. |
 

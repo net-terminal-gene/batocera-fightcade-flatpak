@@ -58,10 +58,14 @@ BTN_SOUTH = 0x130
 BTN_EAST = 0x131
 BTN_NORTH = 0x133
 BTN_WEST = 0x134
+BTN_TL = 0x136
 BTN_TR = 0x137
 BTN_TR2 = 0x139
 BTN_SELECT = 0x13A
 BTN_START = 0x13B
+
+# ABS axes that are sticks or hats — not analog triggers.
+STICK_ABS = frozenset({ABS_X, ABS_Y, 2, 3, 4, ABS_HAT0X, ABS_HAT0Y})
 
 WRAP_SCRIPT = "/userdata/system/fightcade-flatpak/crt/fightcade-crt-switchres"
 CURSOR_CTL = "/userdata/system/fightcade-flatpak/input/fightcade-cursor"
@@ -536,6 +540,16 @@ def clear_crt_pause() -> None:
 
 def list_gamepad_event_nodes(device_match: str) -> list[tuple[str, str]]:
     pads: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(label: str, event_path: str) -> None:
+        if event_path in seen:
+            return
+        if device_match and device_match.lower() not in label.lower():
+            return
+        seen.add(event_path)
+        pads.append((label, event_path))
+
     for js_path in sorted(glob.glob("/dev/input/by-id/*-joystick")):
         if js_path.endswith("-event-joystick"):
             continue
@@ -547,9 +561,17 @@ def list_gamepad_event_nodes(device_match: str) -> list[tuple[str, str]]:
         event_path = js_path.replace("-joystick", "-event-joystick")
         if not os.path.exists(event_path):
             continue
-        if device_match and device_match.lower() not in label.lower():
+        add(label, event_path)
+
+    # Some pads (e.g. Nintendo Switch Pro Controller) only expose *-event-joystick.
+    for event_path in sorted(glob.glob("/dev/input/by-id/*-event-joystick")):
+        if not os.path.exists(event_path):
             continue
-        pads.append((label, event_path))
+        label = os.path.basename(event_path).removesuffix("-event-joystick")
+        if "Motion" in label:
+            continue
+        add(label, event_path)
+
     return pads
 
 
@@ -567,11 +589,12 @@ class PadBindings:
     btn_r1: int = BTN_TR
     r2_code: int = BTN_TR2
     r2_is_axis: bool = False
+    r2_sources: list[tuple[int, bool]] | None = None
     abs_x: int = ABS_X
     abs_y: int = ABS_Y
     abs_hat_x: int = ABS_HAT0X
     abs_hat_y: int = ABS_HAT0Y
-    source: str = "evdev-default"
+    source: str = "unconfigured"
     es_device: str = ""
     es_guid: str = ""
 
@@ -581,11 +604,17 @@ class PadBindings:
             codes.append(self.btn_hotkey)
         return tuple(codes)
 
+    def _r2_sources_list(self) -> list[tuple[int, bool]]:
+        if self.r2_sources:
+            return self.r2_sources
+        return [(self.r2_code, self.r2_is_axis)]
+
     @property
     def tracked_abs(self) -> frozenset[int]:
         codes = {self.abs_x, self.abs_y, self.abs_hat_x, self.abs_hat_y}
-        if self.r2_is_axis:
-            codes.add(self.r2_code)
+        for code, is_axis in self._r2_sources_list():
+            if is_axis:
+                codes.add(code)
         return frozenset(codes)
 
     def probe_button_names(self) -> dict[int, str]:
@@ -600,7 +629,12 @@ class PadBindings:
         }
         if self.btn_hotkey >= 0 and self.btn_hotkey not in names:
             names[self.btn_hotkey] = "HOTKEY (select chord)"
-        if not self.r2_is_axis:
+        for code, is_axis in self._r2_sources_list():
+            if is_axis:
+                continue
+            if code not in names:
+                names[code] = "R2 / slow cursor (button)"
+        if not self.r2_is_axis and self.r2_code not in names:
             names[self.r2_code] = "R2 / slow cursor (button)"
         return names
 
@@ -714,9 +748,12 @@ def r2_active(
     axes: dict[int, int],
     caps: dict[int, tuple[int, int, int]],
 ) -> bool:
-    if bind.r2_is_axis:
-        return axis_triggered(axes, caps, bind.r2_code)
-    return key_down(keys, bind.r2_code)
+    for code, is_axis in bind._r2_sources_list():
+        if is_axis and axis_triggered(axes, caps, code):
+            return True
+        if not is_axis and key_down(keys, code):
+            return True
+    return False
 
 
 def es_binding(inputs: dict[str, int], *names: str, default: int) -> int:
@@ -736,6 +773,124 @@ ES_SLOT_LEGACY: dict[str, tuple[str, ...]] = {
     "west": ("west", "y"),
     "north": ("north", "x"),
 }
+
+
+def read_device_key_abs(event_path: str) -> tuple[frozenset[int], frozenset[int]]:
+    """Return (key_codes, abs_axes) for this evdev node."""
+    if not HAS_EVDEV:
+        return frozenset(), frozenset()
+    try:
+        dev = InputDevice(event_path)
+        caps = dev.capabilities()
+        keys = frozenset(caps.get(EV_KEY, ()))
+        abs_axes: set[int] = set(caps.get(EV_ABS, ()))
+        # Capability bitmaps can omit axes that still respond to absinfo/events.
+        for code in range(40):
+            try:
+                dev.absinfo(code)
+            except (OSError, TypeError):
+                continue
+            abs_axes.add(code)
+        dev.close()
+    except OSError as exc:
+        log(f"device caps read failed {event_path}: {exc}")
+        return frozenset(), frozenset()
+    return keys, frozenset(abs_axes)
+
+
+def _pick_key(keys: frozenset[int], code: int, fallback: int) -> int:
+    return code if code in keys else fallback
+
+
+def find_r2_sources(
+    event_path: str,
+    keys: frozenset[int],
+    abs_axes: frozenset[int],
+) -> list[tuple[int, bool]]:
+    """All plausible R2 inputs on this device (axis and/or button)."""
+    sources: list[tuple[int, bool]] = []
+    seen: set[tuple[int, bool]] = set()
+    key_set = set(keys)
+    abs_set = set(abs_axes)
+
+    def add(code: int, is_axis: bool) -> None:
+        item = (code, is_axis)
+        if item not in seen:
+            seen.add(item)
+            sources.append(item)
+
+    if 5 in abs_set:
+        add(5, True)
+    elif 2 in abs_set:
+        add(2, True)
+    else:
+        extras = sorted(a for a in abs_set if a not in STICK_ABS)
+        if extras and HAS_EVDEV:
+            try:
+                dev = InputDevice(event_path)
+                trigger_axes: list[int] = []
+                for axis in extras:
+                    try:
+                        ai = dev.absinfo(axis)
+                    except (OSError, TypeError):
+                        continue
+                    span = ai.max - ai.min
+                    if span <= 0:
+                        continue
+                    if span <= 255 or (ai.min >= 0 and ai.max <= 1023):
+                        trigger_axes.append(axis)
+                dev.close()
+                if trigger_axes:
+                    add(max(trigger_axes), True)
+            except OSError as exc:
+                log(f"trigger axis scan failed {event_path}: {exc}")
+
+    if BTN_TR2 in key_set:
+        add(BTN_TR2, False)
+    if BTN_TR in key_set:
+        pair_r2 = BTN_TR - 2
+        if BTN_WEST < pair_r2 < BTN_TR:
+            add(pair_r2, False)
+        for code in sorted(c for c in key_set if BTN_WEST < c < BTN_TR):
+            add(code, False)
+
+    if not sources:
+        add(BTN_TR2, False)
+    return sources
+
+
+def apply_r2_sources(bind: PadBindings, sources: list[tuple[int, bool]]) -> None:
+    bind.r2_sources = sources
+    if sources:
+        bind.r2_code, bind.r2_is_axis = sources[0]
+
+
+def find_r2_on_device(
+    event_path: str,
+    keys: frozenset[int],
+    abs_axes: frozenset[int],
+) -> tuple[int, bool]:
+    sources = find_r2_sources(event_path, keys, abs_axes)
+    return sources[0]
+
+
+def bindings_from_evdev_device(event_path: str, device_guid: str) -> PadBindings:
+    """Linux gamepad layout on this node when Batocera has no es_input profile."""
+    keys, abs_axes = read_device_key_abs(event_path)
+    guid_part = device_guid or "unknown GUID"
+    b = PadBindings(
+        source=f"evdev-scan (no ES profile for {guid_part})",
+        es_guid=device_guid,
+    )
+    b.btn_left = _pick_key(keys, BTN_SOUTH, b.btn_left)
+    b.btn_right = _pick_key(keys, BTN_EAST, b.btn_right)
+    b.btn_combo_west = _pick_key(keys, BTN_WEST, b.btn_combo_west)
+    b.btn_combo_north = _pick_key(keys, BTN_NORTH, b.btn_combo_north)
+    b.btn_select = _pick_key(keys, BTN_SELECT, b.btn_select)
+    b.btn_start = _pick_key(keys, BTN_START, b.btn_start)
+    b.btn_r1 = _pick_key(keys, BTN_TR, b.btn_r1)
+    apply_r2_sources(b, find_r2_sources(event_path, keys, abs_axes))
+    return b
 
 
 def bindings_from_es_inputs(
@@ -766,6 +921,7 @@ def bindings_from_es_inputs(
             b.r2_code = inputs["r2"]
         else:
             b.r2_code = inputs["r2"]
+        b.r2_sources = [(b.r2_code, b.r2_is_axis)]
     if "joystick1left" in inputs:
         b.abs_x = inputs["joystick1left"]
     if "joystick1up" in inputs:
@@ -779,22 +935,26 @@ def resolve_pad_bindings(
     use_es_input: bool,
 ) -> PadBindings:
     if not use_es_input:
-        return PadBindings()
+        return PadBindings(source="disabled (use_es_input=0)")
     guid = evdev_device_guid(event_path)
-    if not guid:
-        return PadBindings(source="evdev-default (no device GUID)")
-    cfg = es_configs_by_guid.get(guid.lower())
-    if not cfg:
-        return PadBindings(source=f"evdev-default (no profile for {guid})")
-    inputs = cfg.get("inputs", {})
-    if not inputs:
-        return PadBindings(source=f"evdev-default (empty profile for {guid})")
-    return bindings_from_es_inputs(
-        inputs,
-        cfg.get("input_types", {}),
-        cfg.get("deviceName", ""),
-        guid,
+    if guid:
+        cfg = es_configs_by_guid.get(guid.lower())
+        inputs = (cfg or {}).get("inputs") or {}
+        if inputs:
+            return bindings_from_es_inputs(
+                inputs,
+                cfg.get("input_types", {}),
+                cfg.get("deviceName", ""),
+                guid,
+            )
+    if not HAS_EVDEV:
+        return PadBindings(source="unavailable (python3-evdev missing)")
+    bindings = bindings_from_evdev_device(event_path, guid)
+    log(
+        f"{event_path}: {bindings.source}; "
+        "map once in System Settings → ES Controller Mapping if probe is wrong"
     )
+    return bindings
 
 
 def alt_tab_allowed(
@@ -884,6 +1044,9 @@ def load_pad_axis_caps(
     }
     if b.r2_is_axis:
         defaults[b.r2_code] = (0, 255, 0)
+    for code, is_axis in b._r2_sources_list():
+        if is_axis:
+            defaults.setdefault(code, (0, 255, 0))
     if not HAS_EVDEV:
         return defaults
     caps: dict[int, tuple[int, int, int]] = {}
@@ -1554,6 +1717,14 @@ def cmd_probe(device_match: str) -> int:
             + (f" ({bindings.es_device})" if bindings.es_device else ""),
             flush=True,
         )
+        if bindings.source.startswith("evdev-scan"):
+            print(
+                "  NOTE: Batocera has no es_input preset for this GUID. "
+                "Slots were scanned on this device only. "
+                "If any button is wrong, map once in "
+                "System Settings → ES Controller Mapping, then re-run probe.",
+                flush=True,
+            )
         for code, name in sorted(bindings.probe_button_names().items()):
             print(f"    {name}: evdev {code} ({code:#x})", flush=True)
         print(
@@ -1563,6 +1734,13 @@ def cmd_probe(device_match: str) -> int:
         )
         if bindings.r2_is_axis:
             print(f"    R2 slow-cursor axis: {bindings.r2_code}", flush=True)
+        extra_r2 = bindings._r2_sources_list()
+        if len(extra_r2) > 1:
+            parts = [
+                f"axis {c}" if ax else f"button {c} ({c:#x})"
+                for c, ax in extra_r2
+            ]
+            print(f"    R2 sources (any active): {', '.join(parts)}", flush=True)
     print("Press buttons for 15s (Ctrl+C to stop early)...", flush=True)
     label, event_path = pads[0]
     bindings = resolve_pad_bindings(event_path, es_configs_by_guid, use_es_input)
