@@ -45,6 +45,7 @@ ES_INPUT_SYSTEM = "/usr/share/emulationstation/es_input.cfg"
 FBNEO_FLAG = "/tmp/fightcade-fbneo-crt-active"
 FLYCAST_GAME_FLAG = "/tmp/fightcade-flycast-game-active"
 CRT_PAUSEFILE = "/tmp/fightcade-switchres-wrap.pause"
+CRT_STATEFILE = "/tmp/fightcade-switchres-wrap.state"
 FLYCAST_PGREP_RE = r"flycast\.elf"
 FBNEO_PGREP_RE = r"fcadefbneo\.exe"
 SNES9X_PGREP_RE = r"fcadesnes9x\.exe"
@@ -865,6 +866,17 @@ def crt_paused() -> bool:
             return fh.read().strip() == "1"
     except OSError:
         return False
+
+
+def crt_switchres_active() -> bool:
+    try:
+        with open(CRT_STATEFILE, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip().startswith("ACTIVE="):
+                    return line.strip().split("=", 1)[1] == "1"
+    except OSError:
+        pass
+    return False
 
 
 def clear_crt_pause() -> None:
@@ -1934,28 +1946,29 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and now - last_pause_at >= combo_cooldown
             ):
                 session.refresh(display, force=True)
-                if (
-                    fightcade_snes9x_running()
-                    and not crt_paused()
-                    and not emu_menu_open
-                ):
-                    emu_menu_open = True
-                    trigger_crt_esc_pause()
-                    focus_snes9x_window(display)
-                    session.refresh(display, force=True)
-                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
-                    allow_click = allow_mouse
-                    last_pause_at = now
-                    set_cursor_visible(True, display)
-                    cursor_visible = True
-                    log("SELECT+WEST opened Snes9x menu")
-                elif fightcade_snes9x_running() and crt_paused():
-                    trigger_crt_esc_pause()
-                    focus_snes9x_window(display)
-                    last_pause_at = now
-                    set_cursor_visible(True, display)
-                    cursor_visible = True
-                    log("SELECT+WEST retried Snes9x menu")
+                if fightcade_snes9x_running():
+                    hd_snes = not crt_switchres_active()
+                    snes_open = (
+                        hd_snes and (crt_paused() or not emu_menu_open)
+                    ) or (
+                        not hd_snes
+                        and not session.crt_paused
+                        and not crt_paused()
+                        and not emu_menu_open
+                    )
+                    if snes_open:
+                        emu_menu_open = True
+                        trigger_crt_esc_pause()
+                        focus_snes9x_window(display)
+                        session.refresh(display, force=True)
+                        allow_mouse = session.lobby_mouse_allowed(
+                            flycast_menu_cursor
+                        )
+                        allow_click = allow_mouse
+                        last_pause_at = now
+                        set_cursor_visible(True, display)
+                        cursor_visible = True
+                        log("SELECT+WEST opened Snes9x menu")
                 elif (
                     session.fbneo_combo_available()
                     and not session.crt_paused
@@ -1989,16 +2002,23 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and now - last_resume_at >= combo_cooldown
             ):
                 session.refresh(display, force=True)
-                if fightcade_snes9x_running() and crt_paused():
-                    emu_menu_open = False
-                    trigger_crt_resume()
-                    session.refresh(display, force=True)
-                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
-                    allow_click = allow_mouse
-                    last_resume_at = now
-                    set_cursor_visible(False, display)
-                    cursor_visible = False
-                    log("SELECT+NORTH closed Snes9x menu")
+                if fightcade_snes9x_running():
+                    hd_snes = not crt_switchres_active()
+                    snes_close = (hd_snes and (crt_paused() or emu_menu_open)) or (
+                        not hd_snes and crt_paused()
+                    )
+                    if snes_close:
+                        emu_menu_open = False
+                        trigger_crt_resume()
+                        session.refresh(display, force=True)
+                        allow_mouse = session.lobby_mouse_allowed(
+                            flycast_menu_cursor
+                        )
+                        allow_click = allow_mouse
+                        last_resume_at = now
+                        set_cursor_visible(False, display)
+                        cursor_visible = False
+                        log("SELECT+NORTH closed Snes9x menu")
                 elif session.fbneo_combo_available():
                     emu_menu_open = False
                     trigger_crt_resume()

@@ -308,6 +308,47 @@ fightcade_snes9x_menu_keys() {
     fightcade_cursor_show
 }
 
+# HD only: leave EmulateFullscreen (Alt+Return) exposes the menu bar at desktop res.
+# Verified on hardware: 1920x1080 gameplay -> 1920x1058 with menu bar; no Switchres.
+snes9x_window_height() {
+    local wid gh
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 1
+    gh=0
+    while IFS='=' read -r key val; do
+        [ "$key" = "HEIGHT" ] && gh=$val
+    done <<EOF
+$(DISPLAY="$(fightcade_pick_display)" xdotool getwindowgeometry --shell "$wid" 2>/dev/null)
+EOF
+    [ "$gh" -gt 0 ] || return 1
+    printf '%s\n' "$gh"
+}
+
+snes9x_emulated_fullscreen() {
+    local h
+    h=$(snes9x_window_height) || return 1
+    [ "$h" -ge 1070 ]
+}
+
+hd_pause_snes9x_menu() {
+    if snes9x_emulated_fullscreen; then
+        fightcade_snes9x_leave_emulate_fullscreen || true
+    fi
+    printf '1\n' > "$PAUSEFILE"
+    fightcade_cursor_show
+}
+
+hd_resume_snes9x_menu() {
+    crt_is_paused || return 0
+    fightcade_wine_emu_send_key snes9x Escape
+    sleep 0.1
+    if ! snes9x_emulated_fullscreen; then
+        fightcade_snes9x_leave_emulate_fullscreen || true
+    fi
+    printf '0\n' > "$PAUSEFILE"
+    fightcade_cursor_hide
+}
+
 crt_pause_snes9x_menu() {
     local conf pre_mode pre_res mw mh
     conf=$(snes9x_conf_for_menu)
@@ -800,6 +841,13 @@ crt_is_paused() {
     [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]
 }
 
+switchres_session_active() {
+    [ -f "$STATEFILE" ] || return 1
+    # shellcheck disable=SC1090
+    . "$STATEFILE"
+    [ "${ACTIVE:-0}" = "1" ]
+}
+
 crt_keyboard_event_nodes() {
     # Real keyboards only. Skip power buttons, evmapy, and gamepad HID kbd nodes.
     awk '
@@ -977,7 +1025,14 @@ restore_all_configs() {
     restore_ini "${FC_DATA}/config/fcadefbneo/fcadefbneo.ini"
     restore_ini "${FC_DATA}/config/ggpofba/ggpofba.ini"
     restore_snes9x_conf "$(snes9x_conf_path)"
+    restore_snes9x_menu_pause_conf "$(snes9x_conf_path)"
     restore_flycast_cfg "$(flycast_cfg_path)"
+}
+
+fightcade_apply_hd_video_baseline() {
+    local hd_patch="${PROJECT_DIR}/hd/patch-hd-video.sh"
+    [ -x "$hd_patch" ] || return 0
+    "$hd_patch" >>"$LOG_FILE" 2>&1 || true
 }
 
 fightcade_normalize_url() {
@@ -1033,6 +1088,7 @@ fightcade_pre_play() {
     restore_all_configs
 
     if ! fightcade_should_use_switchres; then
+        fightcade_apply_hd_video_baseline
         fightcade_save_session_state "" "" "" "" "" 0
         return 0
     fi
@@ -1230,6 +1286,7 @@ fightcade_emergency_recover() {
     fightcade_kill_stale_wrappers
     fightcade_kill_wine_orphans
     restore_all_configs
+    fightcade_apply_hd_video_baseline
     fightcade_drop_stale_switchres_modes
     fightcade_clear_session_state
     batocera-resolution minTomaxResolution 2>/dev/null || true
@@ -1253,13 +1310,15 @@ fightcade_crt_esc_pause() {
         fi
     fi
 
-    emu=$(fightcade_running_wine_menu_emu) || return 0
-    if [ "$emu" = "snes9x" ]; then
-        crt_pause_snes9x_menu
+    if crt_is_paused; then
+        emu=$(fightcade_running_wine_menu_emu) || return 0
+        if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
+            hd_pause_snes9x_menu
+        fi
         return 0
     fi
 
-    crt_is_paused && return 0
+    emu=$(fightcade_running_wine_menu_emu) || return 0
 
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
@@ -1272,6 +1331,11 @@ fightcade_crt_esc_pause() {
             fightcade_cursor_show
             return 0
         fi
+    fi
+
+    if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
+        hd_pause_snes9x_menu
+        return 0
     fi
 
     printf '1\n' > "$PAUSEFILE"
@@ -1298,12 +1362,16 @@ fightcade_crt_resume() {
     fi
 
     emu=$(fightcade_running_wine_menu_emu) || return 0
-    if [ "$emu" = "snes9x" ]; then
-        crt_resume_snes9x_menu
+    if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
+        hd_resume_snes9x_menu
         return 0
     fi
     printf '0\n' > "$PAUSEFILE"
-    fightcade_wine_emu_resume_keys "$emu" full
+    if [ "$emu" = "snes9x" ]; then
+        fightcade_wine_emu_send_key snes9x Escape
+    else
+        fightcade_wine_emu_resume_keys "$emu" full
+    fi
     fightcade_cursor_hide
 }
 
