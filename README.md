@@ -20,7 +20,8 @@ guides linked under [Added features](#added-features) below.
 
 This installer is in **beta**. Before you report issues, walk through
 [docs/beta-test-checklist.md](docs/beta-test-checklist.md) for **HD mode** (LCD / HDMI)
-and **CRT mode** (xorg + Switchres + Batocera-CRT-Script). Each mode covers **TEST GAME**,
+and **CRT mode** (xorg + Switchres + Batocera-CRT-Script). **CRT testers:** set Fightcade
+to **640×480** first ([CRT mode (resolution)](#crt-mode-resolution)). Each mode covers **TEST GAME**,
 **TRAINING**, **ONLINE MATCH**, **REPLAY**, and **LIVE SPECTATING**. Include output from
 `/userdata/system/fightcade-flatpak/fightcade-diagnose` in your report. Post feedback in the [Discord beta thread](https://discord.com/channels/357518249883205632/1536626216105148436).
 
@@ -29,6 +30,7 @@ and **CRT mode** (xorg + Switchres + Batocera-CRT-Script). Each mode covers **TE
 **On this page** (install and prerequisites):
 
 - [Install](#install)
+- [CRT mode (resolution)](#crt-mode-resolution)
 - [ROM format and BIOS](#rom-format--bios-requirements)
 - [ROM path mapping](#rom-path-mapping)
 - [Commands](#commands)
@@ -65,6 +67,25 @@ The installer:
 
 **Also installs** (see [Added features](#added-features)): gamepad lobby navigation,
 lobby chat config, HD video defaults, and CRT / Switchres support on xorg CRT setups.
+
+## CRT mode (resolution)
+
+CRT play needs [**Batocera-CRT-Script**](https://github.com/ZFEbHVUE/Batocera-CRT-Script),
+**xorg** display mode, and Switchres (see [docs/CRT.md](docs/CRT.md)).
+
+> [!IMPORTANT]
+> **Set Fightcade to 640×480 in CRT mode.** In EmulationStation: **Ports → Fightcade →
+> Advanced Game Settings → Video Mode** → choose **640×480** (or your CRT menu timing
+> that matches 640×480). Do not run the Fightcade lobby smaller or larger than that.
+>
+> The Fightcade UI is laid out for menu timing at that size. Other resolutions look wrong
+> (cropped, oversized, or misaligned), and **exiting an emulator back to the lobby** is
+> unreliable when Fightcade is not at 640×480. Per-game native resolution switching
+> (Switchres) is separate: the lobby stays at menu timing; only gameplay uses the game's
+> modeline.
+
+Walk through [docs/beta-test-checklist.md](docs/beta-test-checklist.md#crt-mode-xorg--switchres)
+for CRT validation after you set the resolution.
 
 ## ROM format & BIOS requirements
 
