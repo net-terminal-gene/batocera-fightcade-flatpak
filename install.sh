@@ -11,7 +11,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -212,41 +212,9 @@ flatpak_deploy_dir() {
 }
 
 patch_flatpak_xdg_open() {
-    local deploy xdg_open backup wrap
-    deploy=$(flatpak_deploy_dir) || true
-    [ -n "${deploy}" ] || fail "Could not locate Flatpak deploy dir for ${APP_ID}."
-
-    xdg_open="${deploy}/files/bin/xdg-open"
-    backup="${xdg_open}.fc-original"
-    wrap="${PROJECT_DIR}/crt/fightcade-crt-switchres"
-
-    [ -f "${xdg_open}" ] || fail "Flatpak xdg-open not found at ${xdg_open}"
-
-    if [ ! -f "${backup}" ]; then
-        cp -a "${xdg_open}" "${backup}"
-        ok "Backed up Flatpak xdg-open to ${backup}"
-    fi
-
-    cat > "${xdg_open}" <<XDGOPEN
-#!/bin/bash
-# Patched by ${PROJECT_DIR}/install.sh for Batocera CRT Switchres.
-# fcade://play/* writes play.pending for fightcade-crt-hostd; fcade-quark stays in Flatpak.
-
-if [[ "\$1" == fcade://* ]]; then
-  if [[ "\$1" == fcade://play/* ]]; then
-    printf '%s\n' "\$1" > "${PROJECT_DIR}/play.pending"
-  fi
-  exec /app/bin/fcade-quark "\$@"
-fi
-
-if [[ "\$1" =~ ^(http|https):// ]] && [ -x "/app/steamos/bin/min-browser" ]; then
-    /app/steamos/bin/min-browser "\$@"
-    exit 0
-fi
-
-/usr/bin/xdg-open "\$@"
-XDGOPEN
-    chmod 0755 "${xdg_open}"
+    local patch_script="${PROJECT_DIR}/crt/patch-flatpak-xdg-open.sh"
+    [ -x "${patch_script}" ] || fail "xdg-open patch script missing: ${patch_script}"
+    "${patch_script}"
     ok "Patched Flatpak xdg-open for fcade:// Switchres wrapper"
 }
 
@@ -312,6 +280,44 @@ remove_legacy_duplicates() {
   fi
   if [ -d "${pd}/hd/presets" ] && [ -d "${pd}/crt/hd-presets" ]; then
     rm -rf "${pd}/crt/hd-presets"
+  fi
+}
+
+link_cli_tools() {
+  local pd="$1"
+  mkdir -p /usr/bin
+  ln -sf "${pd}/input/fightcade-pad-mouse" /usr/bin/fightcade-pad-mouse
+  ln -sf "${pd}/input/fightcade-cursor" /usr/bin/fightcade-cursor
+  ln -sf "${pd}/fightcade-diagnose" /usr/bin/fightcade-diagnose
+}
+
+install_chat_config() {
+  local src="${PROJECT_DIR}/input/fightcade-lobby-chat.conf"
+  local dst="/userdata/system/configs/fightcade-lobby-chat.conf"
+  local legacy="/userdata/system/configs/fightcade-pad-mouse-chat.conf"
+  mkdir -p /userdata/system/configs
+  if [ ! -f "${dst}" ]; then
+    if [ -f "${legacy}" ]; then
+      cp -a "${legacy}" "${dst}"
+      ok "Fightcade lobby chat config migrated to ${dst}"
+    else
+      install -m 0644 "${src}" "${dst}"
+      ok "Fightcade lobby chat config installed at ${dst}"
+    fi
+  else
+    ok "Fightcade lobby chat config: ${dst} (unchanged)"
+  fi
+}
+
+install_pad_mouse_config() {
+  local src="${PROJECT_DIR}/input/fightcade-pad-mouse.conf"
+  local dst="/userdata/system/configs/fightcade-pad-mouse.conf"
+  mkdir -p /userdata/system/configs
+  if [ ! -f "${dst}" ]; then
+    install -m 0644 "${src}" "${dst}"
+    ok "Fightcade pad-mouse config installed at ${dst}"
+  else
+    ok "Fightcade pad-mouse config: ${dst} (unchanged)"
   fi
 }
 
@@ -494,6 +500,9 @@ for file in ${FILES}; do
     install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
 done
 record_install_branch
+link_cli_tools "${PROJECT_DIR}"
+install_chat_config
+install_pad_mouse_config
 ok "Scripts installed to ${PROJECT_DIR}"
 
 # Install game hook into Batocera user scripts directory

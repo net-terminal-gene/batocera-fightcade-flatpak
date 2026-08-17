@@ -5,9 +5,14 @@
 > to be installed and configured on your Batocera system. Without it, lobby
 > timing and per-game native resolution switching will not work.
 
+Fightcade's playable library is **4:3** and was authored for **CRTs at native
+resolutions** (arcade modelines, 256×224 SNES, Naomi, and the rest). Switchres on
+Batocera restores that model: **menu timing for the lobby**, **per-game modelines
+for gameplay**, then back to the lobby when the session ends.
+
 On CRT setups the installer gives Fightcade native-resolution switching during
 gameplay, matching how Batocera's own emulators behave on a CRT. The Fightcade
-lobby, queues, and settings run at your CRT menu timing (e.g. 640x480i from
+lobby, queues, and settings run at your CRT menu timing (e.g. 640×480i from
 EmulationStation or Advanced Game Settings).
 
 Switchres only changes the display when you start a game (**TEST GAME**, **TRAINING**,
@@ -16,44 +21,47 @@ resolution and refresh rate, then restores menu timing when the session ends.
 
 ## Contents
 
-- [Controls and navigation](#controls--navigation)
-  - [Game controller mapping](#game-controller-mapping)
-  - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
+- [Fightcade resolution](#fightcade-resolution)
+- [Controls (CRT)](#controls-crt)
+- [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
 - [Beta test checklist](beta-test-checklist.md) (session paths, gamepad controls, Switchres on/off)
 - [Recovery](#recovery)
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
 
-## Controls & Navigation
+- [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
 
-> Fightcade is designed to be used with a **keyboard and mouse**, especially for
-> **chat**. This installer adds **gamepad navigation** so you can move the cursor
-> and open menus without a mouse. **Chat still requires a keyboard.**
+## Fightcade resolution
 
-### Game controller mapping
+CRT play needs **xorg** display mode in addition to Batocera-CRT-Script (see caution
+above).
 
-For other keyboard shortcuts, see
-[Keyboard shortcuts (HD)](../README.md#keyboard-shortcuts-hd) in the README.
+> [!IMPORTANT]
+> **Set Fightcade to 640×480 in CRT mode.** In EmulationStation: **Ports → Fightcade →
+> Advanced Game Settings → Video Mode** → choose **640×480**. The lobby UI is laid out for
+> that size. Other resolutions look wrong (cropped, oversized, or misaligned), and exiting
+> an emulator back to the lobby is unreliable when Fightcade is not at 640×480.
 
-**Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
-= emulator menu bar visible at lobby resolution. **Flycast menu** = in-game overlay
-with cursor visible.
+Walk through [beta-test-checklist.md](beta-test-checklist.md#crt-mode-xorg--switchres)
+after you set the resolution.
 
-| Where you are | Left Analog/D-pad | Left Analog/D-pad + B | A | SELECT + X | SELECT + Y | SELECT + R1 |
-|---------------|---------------|-----------|---|------------|------------|-------------|
-| **Lobby** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | — | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **FBNeo playing** | — | — | — | Open Menu | — | — |
-| **FBNeo menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **SNES playing** | — | — | — | Open Menu | — | — |
-| **SNES menu open** | Move cursor (Fast) | Move cursor (Slow) | Left Click | — | Resume game | Focus Open Windows (ES vs EMU vs Fightcade) |
-| **Flycast playing** | — | — | — | Open Menu | Resume game | — |
-| **Flycast menu** | Move cursor (Fast) | Move cursor (Slow) | Left Click | Open Menu | Resume game | — |
+## Controls (CRT)
 
-### Keyboard (FBNeo / SNES)
+Full gamepad layout and Batocera hotkey notes: [Controls & navigation](CONTROLS.md).
+Lobby chat: [Fightcade lobby chat config](LOBBY-CHAT.md).
+
+On CRT, lobby and menus run at menu timing; in-game pause/resume uses **SELECT + WEST/NORTH**
+as documented in the [context table](CONTROLS.md#context-table).
+
+**FBNeo / SNES menu cursor:** Stick, D-pad, **SOUTH** / **EAST**, and modal dialogs
+(for example **Input → Map game inputs**) are covered in
+[Controls — Emulator menus](CONTROLS.md#emulator-menus-fbneo--snes).
+
+## Keyboard (FBNeo / SNES)
 
 | Key | Action |
 |-----|--------|
-| **ESC** | Lobby resolution + open emulator menu (same as SELECT + X) |
+| **ESC** | Lobby resolution + open emulator menu (same as SELECT + WEST) |
 | **Alt+Delete** | Resume native resolution (menu may stay open; press **Alt+Enter** to dismiss) |
 
 Exiting the emulator from the menu returns to Fightcade. Launching a new game
@@ -83,5 +91,20 @@ present. Walk through the [Switchres on/off steps](beta-test-checklist.md#switch
 
 Re-run `/userdata/system/fightcade-flatpak/install.sh` after a Fightcade Flatpak update (Flathub can overwrite
 `xdg-open`; the installer re-applies the patch from `xdg-open.fc-original`).
+
+**Game modes and `fcade://` URLs.** Fightcade uses different URL schemes per mode. The installer
+patch normalizes all game launches to `fcade://play/<emu>/<rom>` when writing `play.pending`:
+
+| Mode | Fightcade URL | CRT |
+|------|---------------|-----|
+| TEST GAME / outgoing online | `fcade://play/...` | Yes |
+| Incoming online challenge | `fcade://served/...` | Yes (normalized) |
+| TRAINING | `fcade://training/...` | Yes (normalized) |
+| REPLAY / LIVE SPECTATING | `fcade://stream/...` | Yes (normalized) |
+
+Non-game URLs (`checkrom`, `autoupdate`, `userstatus`, ...) are not written to `play.pending`.
+
+After testing, confirm dispatch in `/userdata/system/logs/fightcade-crt-switchres.log`
+(`hostd: dispatch fcade://play/...`).
 
 [← Back to main README](../README.md)

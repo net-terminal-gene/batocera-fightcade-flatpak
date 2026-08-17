@@ -46,7 +46,7 @@ fi
 if [ -x "$PAD_MOUSE" ] && [ ! -f /userdata/system/configs/fightcade-pad-mouse.disable ]; then
     "$PAD_MOUSE" stop >/dev/null 2>&1 || true
     sleep 0.1
-    setsid "$PAD_MOUSE" daemon >/dev/null 2>&1 </dev/null &
+    setsid "$PAD_MOUSE" daemon >>/tmp/pad-mouse.log 2>&1 </dev/null &
 fi
 
 if [ -x "$CRT_HOSTD" ]; then

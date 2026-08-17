@@ -177,6 +177,285 @@ restore_snes9x_conf() {
     fi
 }
 
+snes9x_conf_for_menu() {
+    if [ -n "${SNES9X_CONF:-}" ] && [ -f "${SNES9X_CONF}" ]; then
+        printf '%s\n' "${SNES9X_CONF}"
+        return 0
+    fi
+    snes9x_conf_path
+}
+
+# CRT gameplay hides the menu bar (HideMenu=TRUE). Menu pause uses patch_snes9x_menu_pause_conf.
+patch_snes9x_hide_menu() {
+    local conf="$1"
+    [ -f "$conf" ] || return 0
+    sed -i 's/^\([[:space:]]*HideMenu[[:space:]]*=\).*/\1 TRUE/' "$conf"
+}
+
+# SNES CRT menu: lobby-sized window + visible menu bar (EmulateFullscreen blocks resize until toggled).
+patch_snes9x_menu_pause_conf() {
+    local conf="$1" mw="$2" mh="$3"
+    [ -f "$conf" ] || return 0
+    [ -f "${conf}.bak.menu" ] || cp "$conf" "${conf}.bak.menu"
+    sed -i 's/^\([[:space:]]*HideMenu[[:space:]]*=\).*/\1 FALSE/' "$conf"
+    sed -i "s/^\([[:space:]]*Fullscreen:Width[[:space:]]*=\).*/\1 $mw/" "$conf"
+    sed -i "s/^\([[:space:]]*Fullscreen:Height[[:space:]]*=\).*/\1 $mh/" "$conf"
+    sed -i 's/^\([[:space:]]*Fullscreen:EmulateFullscreen[[:space:]]*=\).*/\1 FALSE/' "$conf"
+    sed -i "s/^\([[:space:]]*Window:Width[[:space:]]*=\).*/\1 $mw/" "$conf"
+    sed -i "s/^\([[:space:]]*Window:Height[[:space:]]*=\).*/\1 $mh/" "$conf"
+}
+
+restore_snes9x_menu_pause_conf() {
+    local conf="$1"
+    if [ -f "${conf}.bak.menu" ]; then
+        mv -f "${conf}.bak.menu" "$conf"
+    fi
+}
+
+snes9x_lobby_pixels() {
+    local pre_res="$1"
+    local mw mh
+    mw=641
+    mh=480
+    case "$pre_res" in
+        *x*)
+            mw="${pre_res%%x*}"
+            mh="${pre_res#*x}"
+            ;;
+    esac
+    printf '%s %s\n' "$mw" "$mh"
+}
+
+fightcade_snes9x_wid() {
+    local disp pattern
+    disp=$(fightcade_pick_display)
+    pattern=$(wine_emu_window_pattern snes9x)
+    [ -n "$pattern" ] || return 0
+    DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1
+}
+
+# Read WIDTH/HEIGHT from xdotool getwindowgeometry --shell.
+fightcade_snes9x_geometry() {
+    local wid="$1" gw gh
+    wid="${wid:-$(fightcade_snes9x_wid)}"
+    [ -n "$wid" ] || return 1
+    gw=0
+    gh=0
+    while IFS='=' read -r key val; do
+        case "$key" in
+            WIDTH) gw=$val ;;
+            HEIGHT) gh=$val ;;
+        esac
+    done <<EOF
+$(DISPLAY="$(fightcade_pick_display)" xdotool getwindowgeometry --shell "$wid" 2>/dev/null)
+EOF
+    [ "$gw" -gt 0 ] && [ "$gh" -gt 0 ] || return 1
+    printf '%s %s\n' "$gw" "$gh"
+}
+
+fightcade_snes9x_leave_emulate_fullscreen() {
+    local wid disp
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 1
+    disp=$(fightcade_pick_display)
+    DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
+    DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
+    DISPLAY="$disp" xdotool key --window "$wid" --clearmodifiers alt+Return 2>/dev/null || true
+    sleep 0.5
+}
+
+# Size to lobby; retry until geometry matches (first alt+Return is done before switchres).
+fightcade_snes9x_resize_window() {
+    local mw="$1" mh="$2"
+    local wid disp try gw gh minw minh
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 1
+    disp=$(fightcade_pick_display)
+    minw=$((mw - 32))
+    minh=$((mh - 32))
+    [ "$minw" -lt 200 ] && minw=200
+    [ "$minh" -lt 200 ] && minh=200
+    for try in 1 2 3 4 5 6; do
+        DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
+        if [ "$try" -gt 1 ]; then
+            DISPLAY="$disp" xdotool key --window "$wid" --clearmodifiers alt+Return 2>/dev/null || true
+            sleep 0.45
+        fi
+        DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowsize "$wid" "$mw" "$mh" 2>/dev/null || true
+        sleep 0.2
+        DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+        if fightcade_snes9x_geometry "$wid" >/dev/null 2>&1; then
+            read -r gw gh <<< "$(fightcade_snes9x_geometry "$wid")"
+            if [ "$gw" -ge "$minw" ] && [ "$gh" -ge "$minh" ]; then
+                return 0
+            fi
+        fi
+        sleep 0.15
+    done
+    return 1
+}
+
+fightcade_snes9x_menu_keys() {
+    local wid disp
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 0
+    disp=$(fightcade_pick_display)
+    DISPLAY="$disp" xdotool key --window "$wid" --clearmodifiers alt 2>/dev/null || true
+    sleep 0.15
+    DISPLAY="$disp" xdotool key --window "$wid" --clearmodifiers Escape 2>/dev/null || true
+    fightcade_cursor_show
+}
+
+# HD only: Alt+Return + full-size resize exposes menu bar at desktop res (no Switchres).
+hd_display_pixels() {
+    local res w h
+    w=1920
+    h=1080
+    res=$(batocera-resolution currentResolution 2>/dev/null) || res=""
+    case "$res" in
+        *x*) w="${res%%x*}"; h="${res#*x}" ;;
+    esac
+    printf '%s %s\n' "$w" "$h"
+}
+
+restore_snes9x_hd_menu_conf() {
+    local conf="$1"
+    if [ -f "${conf}.bak.hdmenu" ]; then
+        mv -f "${conf}.bak.hdmenu" "$conf"
+    fi
+}
+
+hd_snes9x_resize_window() {
+    local mw="$1" mh="$2"
+    local wid disp try gw gh minw minh
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 1
+    disp=$(fightcade_pick_display)
+    minw=$((mw - 32))
+    minh=$((mh - 32))
+    [ "$minw" -lt 200 ] && minw=200
+    [ "$minh" -lt 200 ] && minh=200
+    for try in 1 2 3 4 5; do
+        DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowsize "$wid" "$mw" "$mh" 2>/dev/null || true
+        sleep 0.2
+        DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+        if fightcade_snes9x_geometry "$wid" >/dev/null 2>&1; then
+            read -r gw gh <<< "$(fightcade_snes9x_geometry "$wid")"
+            if [ "$gw" -ge "$minw" ] && [ "$gh" -ge "$minh" ]; then
+                return 0
+            fi
+        fi
+        sleep 0.15
+    done
+    return 1
+}
+
+hd_snes9x_window_height() {
+    local wid gh
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 1
+    gh=0
+    while IFS='=' read -r key val; do
+        [ "$key" = "HEIGHT" ] && gh=$val
+    done <<EOF
+$(DISPLAY="$(fightcade_pick_display)" xdotool getwindowgeometry --shell "$wid" 2>/dev/null)
+EOF
+    [ "$gh" -gt 0 ] || return 1
+    printf '%s\n' "$gh"
+}
+
+# Alt+Return leaves emulated fullscreen; resize restores full-width menu bar (1920x1058).
+# Conf-only HideMenu patch does not apply live in Wine Snes9x.
+hd_pause_snes9x_menu() {
+    local mw mh gh
+    read -r mw mh <<< "$(hd_display_pixels)"
+    gh=$(hd_snes9x_window_height 2>/dev/null) || gh=0
+    # Gameplay fullscreen ~1080 (hidden menu); menu bar ~1058. Use 1070 so we do not
+    # Alt+Return from menu state (that would close the menu back to 1080).
+    if [ "$gh" -eq 0 ] || [ "$gh" -ge 1070 ]; then
+        fightcade_snes9x_leave_emulate_fullscreen || true
+        sleep 0.25
+    fi
+    hd_snes9x_resize_window "$mw" "$mh" || true
+    gh=$(hd_snes9x_window_height 2>/dev/null) || gh=0
+    if [ "$gh" -gt 0 ] && [ "$gh" -lt 900 ]; then
+        fightcade_snes9x_leave_emulate_fullscreen || true
+        sleep 0.25
+        hd_snes9x_resize_window "$mw" "$mh" || true
+    fi
+    printf '1\n' > "$PAUSEFILE"
+    fightcade_snes9x_menu_keys
+}
+
+hd_resume_snes9x_menu() {
+    local mw mh
+    crt_is_paused || return 0
+    read -r mw mh <<< "$(hd_display_pixels)"
+    fightcade_wine_emu_send_key snes9x Escape
+    sleep 0.1
+    fightcade_snes9x_leave_emulate_fullscreen || true
+    sleep 0.25
+    hd_snes9x_resize_window "$mw" "$mh" || true
+    restore_snes9x_hd_menu_conf "$(snes9x_conf_path)"
+    printf '0\n' > "$PAUSEFILE"
+    fightcade_cursor_hide
+}
+
+crt_pause_snes9x_menu() {
+    local conf pre_mode pre_res mw mh
+    conf=$(snes9x_conf_for_menu)
+    pre_mode=""
+    pre_res=""
+    mw=641
+    mh=480
+    if [ -f "$STATEFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATEFILE"
+        pre_mode="${PRE_MODE:-}"
+        pre_res="${PRE_RES:-}"
+    fi
+    read -r mw mh <<< "$(snes9x_lobby_pixels "$pre_res")"
+
+    if crt_is_paused; then
+        fightcade_snes9x_resize_window "$mw" "$mh" || true
+        fightcade_snes9x_menu_keys
+        return 0
+    fi
+
+    patch_snes9x_menu_pause_conf "$conf" "$mw" "$mh"
+    fightcade_snes9x_leave_emulate_fullscreen
+    export DISPLAY=$(fightcade_pick_display)
+    restore_display_mode "$pre_mode" "$pre_res"
+    poll_snapshot_match "$pre_mode" "$pre_res"
+    fightcade_snes9x_resize_window "$mw" "$mh" || true
+    printf '1\n' > "$PAUSEFILE"
+    fightcade_cursor_show
+    fightcade_snes9x_menu_keys
+}
+
+crt_resume_snes9x_menu() {
+    local conf
+    crt_is_paused || return 0
+    conf=$(snes9x_conf_for_menu)
+    fightcade_wine_emu_send_key snes9x Escape
+    sleep 0.1
+    restore_snes9x_menu_pause_conf "$conf"
+    if [ -f "$STATEFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATEFILE"
+        crt_resume_switchres "${W}" "${H}" "${R}" snes9x "" "$conf"
+    else
+        printf '0\n' > "$PAUSEFILE"
+    fi
+    fightcade_wine_emu_resume_keys snes9x full
+    fightcade_cursor_hide
+}
+
 patch_flycast_cfg() {
     local cfg="$1"
     [ -f "$cfg" ] || return 0
@@ -600,6 +879,7 @@ fightcade_refresh_wine_emu_video() {
     disp=$(fightcade_pick_display)
     wid=$(DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1)
     [ -z "$wid" ] && return 0
+    DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
     DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
     DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
     DISPLAY="$disp" xdotool windowsize "$wid" "$w" "$h" 2>/dev/null || true
@@ -616,6 +896,13 @@ fightcade_reassert_fbneo_window() {
 
 crt_is_paused() {
     [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]
+}
+
+switchres_session_active() {
+    [ -f "$STATEFILE" ] || return 1
+    # shellcheck disable=SC1090
+    . "$STATEFILE"
+    [ "${ACTIVE:-0}" = "1" ]
 }
 
 crt_keyboard_event_nodes() {
@@ -795,7 +1082,15 @@ restore_all_configs() {
     restore_ini "${FC_DATA}/config/fcadefbneo/fcadefbneo.ini"
     restore_ini "${FC_DATA}/config/ggpofba/ggpofba.ini"
     restore_snes9x_conf "$(snes9x_conf_path)"
+    restore_snes9x_menu_pause_conf "$(snes9x_conf_path)"
+    restore_snes9x_hd_menu_conf "$(snes9x_conf_path)"
     restore_flycast_cfg "$(flycast_cfg_path)"
+}
+
+fightcade_apply_hd_video_baseline() {
+    local hd_patch="${PROJECT_DIR}/hd/patch-hd-video.sh"
+    [ -x "$hd_patch" ] || return 0
+    "$hd_patch" >>"$LOG_FILE" 2>&1 || true
 }
 
 fightcade_normalize_url() {
@@ -851,6 +1146,7 @@ fightcade_pre_play() {
     restore_all_configs
 
     if ! fightcade_should_use_switchres; then
+        fightcade_apply_hd_video_baseline
         fightcade_save_session_state "" "" "" "" "" 0
         return 0
     fi
@@ -1048,6 +1344,7 @@ fightcade_emergency_recover() {
     fightcade_kill_stale_wrappers
     fightcade_kill_wine_orphans
     restore_all_configs
+    fightcade_apply_hd_video_baseline
     fightcade_drop_stale_switchres_modes
     fightcade_clear_session_state
     batocera-resolution minTomaxResolution 2>/dev/null || true
@@ -1063,6 +1360,27 @@ fightcade_crt_esc_pause() {
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
         . "$STATEFILE"
+        if [ "${ACTIVE:-0}" = "1" ] && [ "${EMU:-}" = "snes9x" ]; then
+            crt_wine_menu_emu snes9x || return 0
+            emu_running_for snes9x || return 0
+            crt_pause_snes9x_menu
+            return 0
+        fi
+    fi
+
+    if crt_is_paused; then
+        emu=$(fightcade_running_wine_menu_emu) || return 0
+        if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
+            hd_pause_snes9x_menu
+        fi
+        return 0
+    fi
+
+    emu=$(fightcade_running_wine_menu_emu) || return 0
+
+    if [ -f "$STATEFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATEFILE"
         if [ "${ACTIVE:-0}" = "1" ]; then
             crt_wine_menu_emu "${EMU:-}" || return 0
             emu_running_for "${EMU:-}" || return 0
@@ -1073,7 +1391,11 @@ fightcade_crt_esc_pause() {
         fi
     fi
 
-    emu=$(fightcade_running_wine_menu_emu) || return 0
+    if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
+        hd_pause_snes9x_menu
+        return 0
+    fi
+
     printf '1\n' > "$PAUSEFILE"
     fightcade_wine_emu_send_key "$emu" Escape
     fightcade_cursor_show
@@ -1088,14 +1410,26 @@ fightcade_crt_resume() {
         if [ "${ACTIVE:-0}" = "1" ]; then
             crt_wine_menu_emu "${EMU:-}" || return 0
             emu_running_for "${EMU:-}" || return 0
+            if [ "${EMU:-}" = "snes9x" ]; then
+                crt_resume_snes9x_menu
+                return 0
+            fi
             crt_trigger_resume "${W}" "${H}" "${R}" "${EMU:-}" "${INI_PATH:-}" "${SNES9X_CONF:-}" full
             return 0
         fi
     fi
 
     emu=$(fightcade_running_wine_menu_emu) || return 0
+    if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
+        hd_resume_snes9x_menu
+        return 0
+    fi
     printf '0\n' > "$PAUSEFILE"
-    fightcade_wine_emu_resume_keys "$emu" full
+    if [ "$emu" = "snes9x" ]; then
+        fightcade_wine_emu_send_key snes9x Escape
+    else
+        fightcade_wine_emu_resume_keys "$emu" full
+    fi
     fightcade_cursor_hide
 }
 

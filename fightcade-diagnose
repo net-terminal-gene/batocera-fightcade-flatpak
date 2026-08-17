@@ -348,8 +348,12 @@ if [ -n "$deploy" ]; then
     xdg_open="${deploy}/files/bin/xdg-open"
     backup="${xdg_open}.fc-original"
     if [ -f "$backup" ] && grep -q 'play.pending' "$xdg_open" 2>/dev/null \
+        && grep -q 'fcade-quark' "$xdg_open" 2>/dev/null \
+        && grep -q 'served|training|stream' "$xdg_open" 2>/dev/null; then
+        pass "Flatpak xdg-open patched (play/served/training/stream → play.pending)"
+    elif [ -f "$backup" ] && grep -q 'play.pending' "$xdg_open" 2>/dev/null \
         && grep -q 'fcade-quark' "$xdg_open" 2>/dev/null; then
-        pass "Flatpak xdg-open patched (play.pending + fcade-quark)"
+        info "Flatpak xdg-open patched for play only (re-run install.sh for full game-mode CRT)"
     elif [ -f "$backup" ]; then
         fail "Flatpak xdg-open backup exists but xdg-open is not patched (re-run install.sh)"
         any_fail=1
