@@ -11,7 +11,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -309,6 +309,18 @@ install_chat_config() {
   fi
 }
 
+install_pad_mouse_config() {
+  local src="${PROJECT_DIR}/input/fightcade-pad-mouse.conf"
+  local dst="/userdata/system/configs/fightcade-pad-mouse.conf"
+  mkdir -p /userdata/system/configs
+  if [ ! -f "${dst}" ]; then
+    install -m 0644 "${src}" "${dst}"
+    ok "Fightcade pad-mouse config installed at ${dst}"
+  else
+    ok "Fightcade pad-mouse config: ${dst} (unchanged)"
+  fi
+}
+
 stop_legacy_crt_watch() {
     local legacy="${PROJECT_DIR}/fightcade-crt-watch"
     if [ -x "${legacy}" ]; then
@@ -490,6 +502,7 @@ done
 record_install_branch
 link_cli_tools "${PROJECT_DIR}"
 install_chat_config
+install_pad_mouse_config
 ok "Scripts installed to ${PROJECT_DIR}"
 
 # Install game hook into Batocera user scripts directory

@@ -3,7 +3,9 @@
 On HD LCD / HDMI setups (1080p, 1440p, 4K, and so on), stock Fightcade emulators
 often launch windowed or stretch the image past the screen edges. The installer
 applies HD-friendly fullscreen, aspect, and vsync settings for **FBNeo, SNES9x,
-and Flycast** (what most V2 players use daily).
+and Flycast** (what most V2 players use daily). Fightcade's library is **4:3**;
+HD presets keep correct aspect at your panel resolution. For **native CRT modelines
+per game**, see [CRT / Switchres](CRT.md).
 
 `install.sh` runs `hd/patch-hd-video.sh` after the initial ROM sync. That script:
 

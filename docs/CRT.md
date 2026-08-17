@@ -5,9 +5,14 @@
 > to be installed and configured on your Batocera system. Without it, lobby
 > timing and per-game native resolution switching will not work.
 
+Fightcade's playable library is **4:3** and was authored for **CRTs at native
+resolutions** (arcade modelines, 256×224 SNES, Naomi, and the rest). Switchres on
+Batocera restores that model: **menu timing for the lobby**, **per-game modelines
+for gameplay**, then back to the lobby when the session ends.
+
 On CRT setups the installer gives Fightcade native-resolution switching during
 gameplay, matching how Batocera's own emulators behave on a CRT. The Fightcade
-lobby, queues, and settings run at your CRT menu timing (e.g. 640x480i from
+lobby, queues, and settings run at your CRT menu timing (e.g. 640×480i from
 EmulationStation or Advanced Game Settings).
 
 Switchres only changes the display when you start a game (**TEST GAME**, **TRAINING**,
@@ -16,12 +21,29 @@ resolution and refresh rate, then restores menu timing when the session ends.
 
 ## Contents
 
+- [Fightcade resolution](#fightcade-resolution)
 - [Controls (CRT)](#controls-crt)
 - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
 - [Beta test checklist](beta-test-checklist.md) (session paths, gamepad controls, Switchres on/off)
 - [Recovery](#recovery)
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
+
+- [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
+
+## Fightcade resolution
+
+CRT play needs **xorg** display mode in addition to Batocera-CRT-Script (see caution
+above).
+
+> [!IMPORTANT]
+> **Set Fightcade to 640×480 in CRT mode.** In EmulationStation: **Ports → Fightcade →
+> Advanced Game Settings → Video Mode** → choose **640×480**. The lobby UI is laid out for
+> that size. Other resolutions look wrong (cropped, oversized, or misaligned), and exiting
+> an emulator back to the lobby is unreliable when Fightcade is not at 640×480.
+
+Walk through [beta-test-checklist.md](beta-test-checklist.md#crt-mode-xorg--switchres)
+after you set the resolution.
 
 ## Controls (CRT)
 

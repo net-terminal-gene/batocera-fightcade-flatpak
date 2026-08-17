@@ -1,7 +1,9 @@
 # Beta test checklist
 
 Use this while testing [Fightcade Flatpak for Batocera](../README.md) before we call the
-installer done. Check off each item and note anything that fails.
+installer done. The library is **4:3** and was built for **CRTs at native resolutions**;
+CRT testers should confirm **per-game modelines** via Switchres (see [CRT.md](CRT.md)).
+Check off each item and note anything that fails.
 
 **Report problems** with Batocera version, GPU, output (HDMI / VGA / etc.), display
 mode and resolution, what you launched, game + emulator (FBNeo / SNES / Flycast),
@@ -78,58 +80,60 @@ Chat still needs a keyboard. If gamepad navigation does nothing, check
 ### Lobby (Fightcade UI)
 
 - [ ] Left stick / D-pad moves cursor (fast)
-- [ ] Left stick / D-pad + **R2** moves cursor (slow)
-- [ ] **A** = left click
-- [ ] **B** = right click (e.g. challenge player from name context menu)
-- [ ] **SELECT + R1** cycles focus between open windows (EmulationStation vs emulator vs Fightcade)
+- [ ] Left stick / D-pad + **R1** (HD) or **R2** (CRT) moves cursor (slow)
+- [ ] **SOUTH** = left click
+- [ ] **EAST** = right click (e.g. challenge player from name context menu)
+- [ ] **SELECT + right shoulder** cycles focus between open windows (Alt+Tab)
 
 ### FBNeo (arcade and console cores)
 
 **While playing:**
 
-- [ ] **SELECT + X** opens the FBNeo menu (sends **ESC**)
+- [ ] **SELECT + WEST** opens the FBNeo menu (sends **ESC**)
 - [ ] On **CRT** with Switchres active: display returns to **lobby / menu timing** while the menu is open; menu cursor is visible
 
 **While FBNeo menu is open:**
 
-- [ ] Stick / D-pad + **R2** move the menu cursor (fast / slow)
-- [ ] **A** = left click in the menu
-- [ ] **B** = right click in the menu
-- [ ] **Input → Map game inputs** opens; **A** on **OK** closes the dialog (no keyboard or Alt+Tab)
+- [ ] Stick / D-pad + **R1** (HD) or **R2** (CRT) move the menu cursor (fast / slow)
+- [ ] **SOUTH** = left click in the menu
+- [ ] **EAST** = right click in the menu
+- [ ] **Input → Map game inputs** opens; **SOUTH** on **OK** closes the dialog (no keyboard or Alt+Tab)
 - [ ] **Input → Exit Emulator** returns to the Fightcade lobby
-- [ ] **SELECT + Y** resumes the game and hides the menu cursor
+- [ ] **SELECT + NORTH** resumes the game and hides the menu cursor
 - [ ] On **CRT** with Switchres active: display returns to the game's **native modeline** after resume
-- [ ] **SELECT + R1** cycles window focus
+- [ ] On **HD**: **SELECT + WEST** / **SELECT + NORTH** open and close the menu without Switchres
+- [ ] **SELECT + right shoulder** cycles window focus (Alt+Tab)
 
 **Keyboard (optional, FBNeo / SNES):**
 
 - [ ] **ESC** opens the emulator menu (installer layer; not Fightcade **Esc** quit)
-- [ ] **Alt+Delete** then **Alt+Enter** dismisses a stuck menu bar if **SELECT + Y** leaves the bar visible
+- [ ] **Alt+Delete** then **Alt+Enter** dismisses a stuck menu bar if **SELECT + NORTH** leaves the bar visible
 
 ### SNES9x
 
 **While playing:**
 
-- [ ] **SELECT + X** opens the Snes9x menu
+- [ ] **SELECT + WEST** opens the Snes9x menu
 
 **While Snes9x menu is open:**
 
-- [ ] Menu cursor navigation (**A**, **B**, stick, stick + **R2**) works
-- [ ] **SELECT + Y** resumes the game
+- [ ] Menu cursor navigation (**SOUTH**, **EAST**, stick, stick + **R1** HD / **R2** CRT) works
+- [ ] **SELECT + NORTH** resumes the game
 - [ ] On **CRT**: same Switchres pause / resume behavior as FBNeo when a Switchres session is active
+- [ ] On **HD**: menu opens at desktop resolution (no Switchres); cursor uses HD menu speeds
 
 ### Flycast (Dreamcast / Naomi / Atomiswave)
 
 **While playing:**
 
-- [ ] **SELECT + X** opens the Flycast menu overlay
-- [ ] **SELECT + Y** resumes the game (Dreamcast titles)
+- [ ] **SELECT + WEST** opens the Flycast menu overlay
+- [ ] **SELECT + NORTH** resumes the game (Dreamcast titles)
 
 **While Flycast menu is open:**
 
 - [ ] Menu cursor navigation works
-- [ ] **SELECT + X** / **SELECT + Y** toggle the menu overlay as expected
-- [ ] **SELECT + R1** cycles window focus (where applicable)
+- [ ] **SELECT + WEST** / **SELECT + NORTH** toggle the menu overlay as expected
+- [ ] **SELECT + right shoulder** cycles window focus (where applicable)
 
 ---
 
@@ -156,7 +160,7 @@ ROMs and BIOS for them. In the Fightcade UI, you can easily filter for games und
 - [ ] **TEST GAME** launches fullscreen at correct aspect (not stretched off-screen)
 - [ ] Image is not windowed in a small corner
 - [ ] Gameplay runs without obvious vsync tearing (fighters / scrollers)
-- [ ] Gamepad menu controls work (**SELECT + X** / **SELECT + Y**; see [controls checklist](#gamepad-and-menu-controls-all-testers))
+- [ ] Gamepad menu controls work (**SELECT + WEST** / **SELECT + NORTH**; see [controls checklist](#gamepad-and-menu-controls-all-testers))
 - [ ] Exiting returns to the Fightcade lobby at HD resolution (no black screen)
 
 #### TRAINING
@@ -235,8 +239,8 @@ While testing, watch `/userdata/system/logs/fightcade-crt-switchres.log` for
 
 - [ ] **TEST GAME** switches display to the game's **native modeline** (resolution + refresh)
 - [ ] Gameplay fills the CRT as expected for that title
-- [ ] **SELECT + X** during gameplay: lobby timing + emulator menu (Switchres paused)
-- [ ] **SELECT + Y** from menu: native modeline restored, gameplay resumes
+- [ ] **SELECT + WEST** during gameplay: lobby timing + emulator menu (Switchres paused)
+- [ ] **SELECT + NORTH** from menu: native modeline restored, gameplay resumes
 - [ ] Exiting the game restores **lobby / menu timing**
 - [ ] No black screen stuck after exit
 
@@ -305,7 +309,7 @@ touch /userdata/system/configs/fightcade-switchres.disable
 ```
 
 - [ ] **TEST GAME**: display **does not** change resolution (stays at lobby timing)
-- [ ] **SELECT + X** / **SELECT + Y** still open and close emulator menus
+- [ ] **SELECT + WEST** / **SELECT + NORTH** still open and close emulator menus
 
 ```bash
 rm -f /userdata/system/configs/fightcade-switchres.disable
@@ -322,7 +326,7 @@ touch /userdata/system/configs/fightcade-switchres.force
 ```
 
 - [ ] **TEST GAME** switches to the game's native resolution (even though normal mode would not)
-- [ ] Exit returns to lobby timing; **SELECT + X** / **SELECT + Y** still work
+- [ ] Exit returns to lobby timing; **SELECT + WEST** / **SELECT + NORTH** still work
 
 ```bash
 rm -f /userdata/system/configs/fightcade-switchres.force

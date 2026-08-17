@@ -2,8 +2,10 @@
 
 > Fightcade is designed to be used with a **keyboard and mouse**, especially for
 > **chat**. This installer adds **gamepad navigation** so you can move the cursor
-> and open menus without a mouse. For preset lobby chat lines from the gamepad, see
-> [Fightcade lobby chat config](LOBBY-CHAT.md).
+> and open menus without a mouse. The playable library is **4:3** and was built
+> for **CRTs at native resolutions**; on CRT setups, [Switchres](CRT.md) switches
+> per-game modelines while the lobby stays at menu timing. For preset lobby chat
+> lines from the gamepad, see [Fightcade lobby chat config](LOBBY-CHAT.md).
 
 ## Contents
 
@@ -42,7 +44,7 @@ Out of the box, on a standard diamond face layout:
 | **NORTH** + **SELECT** | Top face button | Resume game |
 | **D-pad** | D-pad | Move cursor |
 | **Left analog** | Left stick | Move cursor |
-| **R2** (held alone) | Right trigger | Slow cursor |
+| **R1** (held alone, HD) / **R2** (held alone, CRT) | Shoulder / trigger | Slow cursor |
 | **R1** + **SOUTH** / **EAST** / **WEST** / **NORTH** / **R2** | Face buttons / R2 | Send lobby chat line ([lobby chat config](LOBBY-CHAT.md)) |
 | **Right shoulder** + **SELECT** | Right bumper | Alt+Tab (cycle windows) |
 | **START** + **SELECT** | Start button | Alt+F4 (quit emulator, return to lobby) |
@@ -67,8 +69,27 @@ does not change; only which physical button you assign to each slot changes.
 **Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
 = emulator menu bar visible. **Flycast menu** = in-game overlay with cursor visible.
 
-**Cursor speed:** move the stick or D-pad normally for fast cursor movement. Hold **R2**
-alone while moving the stick or D-pad for slow, precise movement (lobby and emulator menus).
+**Cursor speed:** move the stick or D-pad normally for fast cursor movement. Hold **R1**
+alone (HD) or **R2** alone (CRT) while moving the stick or D-pad for slow, precise movement.
+
+HD (1080p) and CRT (Switchres / sub-1024p desktop) use separate tables in
+`/userdata/system/configs/fightcade-pad-mouse.conf`. CRT is detected from desktop
+resolution (under 1024px wide), not only during an active game.
+
+| Key | Default | When |
+|-----|---------|------|
+| `max_speed_hd` | 20 | HD full stick (in-game) |
+| `slow_speed_hd` | 3 | R1 slow mode (HD) |
+| `max_speed_hd_menu` | 30 | HD emulator menus |
+| `slow_speed_hd_menu` | 5 | R1 slow (HD menus) |
+| `max_speed_crt` | 6 | CRT full stick (in-game) |
+| `slow_speed_crt` | 2 | R2 slow mode (CRT) |
+| `max_speed_crt_lobby` | 8 | CRT Fightcade lobby |
+| `slow_speed_crt_lobby` | 2 | R2 slow (CRT lobby) |
+| `max_speed_crt_menu` | 14 | CRT emulator menus |
+| `slow_speed_crt_menu` | 4 | R2 slow (CRT menus) |
+
+Legacy `max_speed` / `slow_speed` in that file apply to HD only. Quit and relaunch Fightcade from EmulationStation after editing.
 
 **Clicks:** **SOUTH** = left click, **EAST** = right click (challenge flow, context menus).
 
@@ -81,7 +102,7 @@ native modeline and dismisses the menu).
 
 | Action | Combo |
 |--------|--------|
-| Move cursor | Stick / D-pad (hold **R2** alone for slow movement) |
+| Move cursor | Stick / D-pad (hold **R1** alone for slow movement in HD) |
 | Left / right click | **SOUTH** / **EAST** |
 | Resume game | **SELECT + NORTH** |
 | Cycle windows | **SELECT + right shoulder** (Alt+Tab) |
@@ -149,8 +170,8 @@ View or change global bindings: `batocera-joysticks-hotkeys` (see
 
 ## Context table
 
-| Where you are | Left Analog/D-pad | + R2 (held) | SOUTH | EAST | SELECT + WEST | SELECT + NORTH | SELECT + R shoulder | SELECT + Start |
-|---------------|-------------------|-------------|-------|------|---------------|----------------|---------------------|----------------|
+| Where you are | Left Analog/D-pad | + slow (R1 HD / R2 CRT) | SOUTH | EAST | SELECT + WEST | SELECT + NORTH | SELECT + R shoulder | SELECT + Start |
+|---------------|-------------------|-------------------------|-------|------|---------------|----------------|---------------------|----------------|
 | **Lobby** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | — | Alt+Tab (cycle windows) | — |
 | **FBNeo playing** | — | — | — | — | Open FBNeo menu (ESC) | — | — | Quit emulator (lobby) |
 | **FBNeo menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) | Quit emulator (lobby) |

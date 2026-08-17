@@ -308,9 +308,54 @@ fightcade_snes9x_menu_keys() {
     fightcade_cursor_show
 }
 
-# HD only: leave EmulateFullscreen (Alt+Return) exposes the menu bar at desktop res.
-# Verified on hardware: 1920x1080 gameplay -> 1920x1058 with menu bar; no Switchres.
-snes9x_window_height() {
+# HD only: Alt+Return + full-size resize exposes menu bar at desktop res (no Switchres).
+hd_display_pixels() {
+    local res w h
+    w=1920
+    h=1080
+    res=$(batocera-resolution currentResolution 2>/dev/null) || res=""
+    case "$res" in
+        *x*) w="${res%%x*}"; h="${res#*x}" ;;
+    esac
+    printf '%s %s\n' "$w" "$h"
+}
+
+restore_snes9x_hd_menu_conf() {
+    local conf="$1"
+    if [ -f "${conf}.bak.hdmenu" ]; then
+        mv -f "${conf}.bak.hdmenu" "$conf"
+    fi
+}
+
+hd_snes9x_resize_window() {
+    local mw="$1" mh="$2"
+    local wid disp try gw gh minw minh
+    wid=$(fightcade_snes9x_wid)
+    [ -n "$wid" ] || return 1
+    disp=$(fightcade_pick_display)
+    minw=$((mw - 32))
+    minh=$((mh - 32))
+    [ "$minw" -lt 200 ] && minw=200
+    [ "$minh" -lt 200 ] && minh=200
+    for try in 1 2 3 4 5; do
+        DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+        DISPLAY="$disp" xdotool windowsize "$wid" "$mw" "$mh" 2>/dev/null || true
+        sleep 0.2
+        DISPLAY="$disp" xdotool windowmove "$wid" 0 0 2>/dev/null || true
+        if fightcade_snes9x_geometry "$wid" >/dev/null 2>&1; then
+            read -r gw gh <<< "$(fightcade_snes9x_geometry "$wid")"
+            if [ "$gw" -ge "$minw" ] && [ "$gh" -ge "$minh" ]; then
+                return 0
+            fi
+        fi
+        sleep 0.15
+    done
+    return 1
+}
+
+hd_snes9x_window_height() {
     local wid gh
     wid=$(fightcade_snes9x_wid)
     [ -n "$wid" ] || return 1
@@ -324,27 +369,39 @@ EOF
     printf '%s\n' "$gh"
 }
 
-snes9x_emulated_fullscreen() {
-    local h
-    h=$(snes9x_window_height) || return 1
-    [ "$h" -ge 1070 ]
-}
-
+# Alt+Return leaves emulated fullscreen; resize restores full-width menu bar (1920x1058).
+# Conf-only HideMenu patch does not apply live in Wine Snes9x.
 hd_pause_snes9x_menu() {
-    if snes9x_emulated_fullscreen; then
+    local mw mh gh
+    read -r mw mh <<< "$(hd_display_pixels)"
+    gh=$(hd_snes9x_window_height 2>/dev/null) || gh=0
+    # Gameplay fullscreen ~1080 (hidden menu); menu bar ~1058. Use 1070 so we do not
+    # Alt+Return from menu state (that would close the menu back to 1080).
+    if [ "$gh" -eq 0 ] || [ "$gh" -ge 1070 ]; then
         fightcade_snes9x_leave_emulate_fullscreen || true
+        sleep 0.25
+    fi
+    hd_snes9x_resize_window "$mw" "$mh" || true
+    gh=$(hd_snes9x_window_height 2>/dev/null) || gh=0
+    if [ "$gh" -gt 0 ] && [ "$gh" -lt 900 ]; then
+        fightcade_snes9x_leave_emulate_fullscreen || true
+        sleep 0.25
+        hd_snes9x_resize_window "$mw" "$mh" || true
     fi
     printf '1\n' > "$PAUSEFILE"
-    fightcade_cursor_show
+    fightcade_snes9x_menu_keys
 }
 
 hd_resume_snes9x_menu() {
+    local mw mh
     crt_is_paused || return 0
+    read -r mw mh <<< "$(hd_display_pixels)"
     fightcade_wine_emu_send_key snes9x Escape
     sleep 0.1
-    if ! snes9x_emulated_fullscreen; then
-        fightcade_snes9x_leave_emulate_fullscreen || true
-    fi
+    fightcade_snes9x_leave_emulate_fullscreen || true
+    sleep 0.25
+    hd_snes9x_resize_window "$mw" "$mh" || true
+    restore_snes9x_hd_menu_conf "$(snes9x_conf_path)"
     printf '0\n' > "$PAUSEFILE"
     fightcade_cursor_hide
 }
@@ -1026,6 +1083,7 @@ restore_all_configs() {
     restore_ini "${FC_DATA}/config/ggpofba/ggpofba.ini"
     restore_snes9x_conf "$(snes9x_conf_path)"
     restore_snes9x_menu_pause_conf "$(snes9x_conf_path)"
+    restore_snes9x_hd_menu_conf "$(snes9x_conf_path)"
     restore_flycast_cfg "$(flycast_cfg_path)"
 }
 

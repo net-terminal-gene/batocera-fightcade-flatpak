@@ -111,15 +111,7 @@ Change them to whatever your room or game community uses.
 
 ## After you save changes
 
-Restart Fightcade so `fightcade-pad-mouse` reloads the file:
-
-- Quit Fightcade from the lobby and launch it again from EmulationStation, or
-- Run:
-
-```bash
-/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse stop
-/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse daemon
-```
+Quit Fightcade and launch it again from EmulationStation.
 
 ## Troubleshooting
 
@@ -127,7 +119,7 @@ Restart Fightcade so `fightcade-pad-mouse` reloads the file:
 |---------|--------|
 | Nothing sent | Chat input focused? Are you in the **lobby**? Hold **R1** first, then tap the slot (not SELECT). |
 | Wrong button | Slot names follow **ES Controller Mapping**, not plastic labels. Remap in ES if needed. |
-| Old messages after edit | Restart Fightcade or pad-mouse (see above). |
+| Old messages after edit | Quit and relaunch Fightcade from EmulationStation. |
 | Config missing | Re-run `/userdata/system/fightcade-flatpak/install.sh`; first install creates the file. |
 
 [← Controls & navigation](CONTROLS.md) · [← Main README](../README.md)

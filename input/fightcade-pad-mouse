@@ -44,6 +44,12 @@ ES_LAST_INPUT_CFG = "/userdata/system/configs/emulationstation/es_last_input.cfg
 ES_INPUT_SYSTEM = "/usr/share/emulationstation/es_input.cfg"
 FBNEO_FLAG = "/tmp/fightcade-fbneo-crt-active"
 FLYCAST_GAME_FLAG = "/tmp/fightcade-flycast-game-active"
+CRT_DISABLE = "/userdata/system/configs/fightcade-switchres.disable"
+CRT_FORCE = "/userdata/system/configs/fightcade-switchres.force"
+_CRT_PROFILE_CACHE: bool | None = None
+_CRT_PROFILE_AT = 0.0
+_CRT_PROFILE_TTL = 5.0
+
 CRT_PAUSEFILE = "/tmp/fightcade-switchres-wrap.pause"
 CRT_STATEFILE = "/tmp/fightcade-switchres-wrap.state"
 FLYCAST_PGREP_RE = r"flycast\.elf"
@@ -76,8 +82,21 @@ EVENT_STRUCT = struct.Struct("QQHHi")
 DEFAULTS = {
     "deadzone": 8000,
     "deadzone_8bit": 15,
-    "max_speed": 10,
-    "slow_speed": 2,
+    "max_speed_hd": 20,
+    "slow_speed_hd": 3,
+    "max_speed_hd_lobby": 20,
+    "slow_speed_hd_lobby": 3,
+    "max_speed_hd_menu": 30,
+    "slow_speed_hd_menu": 5,
+    "max_speed_crt": 6,
+    "slow_speed_crt": 2,
+    "max_speed_crt_lobby": 8,
+    "slow_speed_crt_lobby": 2,
+    "max_speed_crt_menu": 14,
+    "slow_speed_crt_menu": 4,
+    # Legacy aliases (apply to HD when max_speed_hd / slow_speed_hd omitted).
+    "max_speed": 20,
+    "slow_speed": 3,
     "poll_hz": 60,
     "session_refresh_sec": 0.25,
     "lobby_refresh_sec": 2.0,
@@ -121,6 +140,13 @@ def load_conf() -> dict:
                 key, val = line.split("=", 1)
                 key = key.strip().lower()
                 val = val.strip()
+                if key in ("max_speed", "slow_speed"):
+                    if key == "max_speed":
+                        cfg["max_speed_hd"] = float(val)
+                    else:
+                        cfg["slow_speed_hd"] = float(val)
+                    cfg[key] = float(val)
+                    continue
                 if key in cfg:
                     if isinstance(cfg[key], bool):
                         cfg[key] = val.lower() in ("1", "true", "yes", "on")
@@ -133,6 +159,90 @@ def load_conf() -> dict:
     except (OSError, ValueError) as exc:
         log(f"config parse warning: {exc}")
     return cfg
+
+
+def resolve_cursor_speeds(
+    cfg: dict,
+    hd_mode: bool,
+    menu_mode: bool = False,
+    lobby_mode: bool = False,
+) -> tuple[float, float]:
+    """Return (max_speed, slow_speed) in pixels per poll for HD/CRT and lobby/menu."""
+    if menu_mode:
+        if hd_mode:
+            max_sp = float(
+                cfg.get(
+                    "max_speed_hd_menu",
+                    cfg.get("max_speed_hd", cfg.get("max_speed", DEFAULTS["max_speed_hd_menu"])),
+                )
+            )
+            slow_sp = float(
+                cfg.get(
+                    "slow_speed_hd_menu",
+                    cfg.get(
+                        "slow_speed_hd",
+                        cfg.get("slow_speed", DEFAULTS["slow_speed_hd_menu"]),
+                    ),
+                )
+            )
+        else:
+            max_sp = float(
+                cfg.get("max_speed_crt_menu", cfg.get("max_speed_crt", DEFAULTS["max_speed_crt_menu"]))
+            )
+            slow_sp = float(
+                cfg.get("slow_speed_crt_menu", cfg.get("slow_speed_crt", DEFAULTS["slow_speed_crt_menu"]))
+            )
+        return max_sp, slow_sp
+    if lobby_mode:
+        if hd_mode:
+            max_sp = float(
+                cfg.get(
+                    "max_speed_hd_lobby",
+                    cfg.get("max_speed_hd", cfg.get("max_speed", DEFAULTS["max_speed_hd_lobby"])),
+                )
+            )
+            slow_sp = float(
+                cfg.get(
+                    "slow_speed_hd_lobby",
+                    cfg.get(
+                        "slow_speed_hd",
+                        cfg.get("slow_speed", DEFAULTS["slow_speed_hd_lobby"]),
+                    ),
+                )
+            )
+        else:
+            max_sp = float(
+                cfg.get(
+                    "max_speed_crt_lobby",
+                    cfg.get("max_speed_crt", DEFAULTS["max_speed_crt_lobby"]),
+                )
+            )
+            slow_sp = float(
+                cfg.get(
+                    "slow_speed_crt_lobby",
+                    cfg.get("slow_speed_crt", DEFAULTS["slow_speed_crt_lobby"]),
+                )
+            )
+        return max_sp, slow_sp
+    if hd_mode:
+        max_sp = float(cfg.get("max_speed_hd", cfg.get("max_speed", DEFAULTS["max_speed_hd"])))
+        slow_sp = float(
+            cfg.get("slow_speed_hd", cfg.get("slow_speed", DEFAULTS["slow_speed_hd"]))
+        )
+    else:
+        max_sp = float(cfg.get("max_speed_crt", DEFAULTS["max_speed_crt"]))
+        slow_sp = float(cfg.get("slow_speed_crt", DEFAULTS["slow_speed_crt"]))
+    return max_sp, slow_sp
+
+
+def menu_mode_active(
+    session: "SessionState",
+    flycast_menu_cursor: bool,
+) -> bool:
+    """True when navigating an emulator menu with the pad cursor (no xdotool)."""
+    if flycast_menu_cursor:
+        return True
+    return crt_paused() and not session.in_lobby
 
 
 def _strip_chat_value(val: str) -> str:
@@ -693,11 +803,24 @@ class SessionState:
         now = time.monotonic()
         self.crt_paused = crt_paused()
 
+        # Stale pause (e.g. quit emulator without SELECT+NORTH) forces menu-mode
+        # clicks in the lobby and breaks left click on Fightcade UI.
+        if self.crt_paused:
+            procs_quick = scan_fightcade_processes()
+            if (
+                not procs_quick["snes9x"]
+                and not procs_quick["fbneo"]
+                and not os.path.isfile(FLYCAST_GAME_FLAG)
+            ):
+                clear_crt_pause()
+                self.crt_paused = False
+
         if not force and now - self.last_lobby_refresh < self.lobby_refresh_sec:
             if self.in_lobby and not self.crt_paused:
                 return
             if self.crt_paused:
                 self.in_lobby = False
+                self._apply_process_scan(scan_fightcade_processes())
                 return
 
         procs = scan_fightcade_processes()
@@ -725,6 +848,10 @@ class SessionState:
         self.last_refresh = now
         self.last_lobby_refresh = now
         self.in_lobby = False
+
+        if self.crt_paused:
+            # Menu open: skip wmctrl/xdotool focus polling; it fights the 60Hz cursor.
+            return
 
         if self.fbneo_running or self.snes9x_running:
             self.fbneo_active = fightcade_fbneo_active()
@@ -877,6 +1004,37 @@ def crt_switchres_active() -> bool:
     except OSError:
         pass
     return False
+
+
+def crt_cursor_profile() -> bool:
+    """CRT speed table when Switchres is in use (lobby + gameplay), not only mid-game."""
+    global _CRT_PROFILE_CACHE, _CRT_PROFILE_AT
+    now = time.monotonic()
+    if _CRT_PROFILE_CACHE is not None and now - _CRT_PROFILE_AT < _CRT_PROFILE_TTL:
+        return _CRT_PROFILE_CACHE
+    profile = False
+    if not os.path.isfile(CRT_DISABLE):
+        if os.path.isfile(CRT_FORCE):
+            profile = True
+        elif os.path.isfile("/usr/bin/switchres"):
+            try:
+                out = subprocess.run(
+                    ["batocera-resolution", "currentResolution"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+                if out.returncode == 0:
+                    res = out.stdout.strip()
+                    w = res.split("x", 1)[0]
+                    if w.isdigit() and int(w) < 1024:
+                        profile = True
+            except (OSError, subprocess.SubprocessError):
+                pass
+    _CRT_PROFILE_CACHE = profile
+    _CRT_PROFILE_AT = now
+    return profile
 
 
 def clear_crt_pause() -> None:
@@ -1103,6 +1261,36 @@ def r2_active(
         if not is_axis and key_down(keys, code):
             return True
     return False
+
+
+def r1_slow_nudge(
+    bind: PadBindings,
+    keys: dict[int, int],
+    axes: dict[int, int],
+    caps: dict[int, tuple[int, int, int]],
+) -> bool:
+    """HD: slow cursor when R1 is held alone (lobby chat uses R1+face)."""
+    if not r1_active(bind, keys):
+        return False
+    for code in (
+        bind.btn_left,
+        bind.btn_right,
+        bind.btn_combo_west,
+        bind.btn_combo_north,
+        bind.btn_select,
+        bind.btn_start,
+    ):
+        if code >= 0 and key_down(keys, code):
+            return False
+    if bind.btn_hotkey >= 0 and bind.btn_hotkey != bind.btn_select:
+        if key_down(keys, bind.btn_hotkey):
+            return False
+    for code, is_axis in bind._r2_sources_list():
+        if is_axis and axis_triggered(axes, caps, code):
+            return False
+        if not is_axis and key_down(keys, code):
+            return False
+    return True
 
 
 def r2_slow_nudge(
@@ -1761,8 +1949,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     display = pick_display()
     deadzone = int(cfg["deadzone"])
     deadzone_8bit = int(cfg.get("deadzone_8bit", DEFAULTS["deadzone_8bit"]))
-    max_speed = float(cfg["max_speed"])
-    slow_speed = float(cfg.get("slow_speed", DEFAULTS["slow_speed"]))
+    max_speed_hd, slow_speed_hd = resolve_cursor_speeds(cfg, hd_mode=True)
+    max_speed_crt, slow_speed_crt = resolve_cursor_speeds(cfg, hd_mode=False)
+    max_speed_hd_menu, slow_speed_hd_menu = resolve_cursor_speeds(
+        cfg, hd_mode=True, menu_mode=True
+    )
+    max_speed_crt_menu, slow_speed_crt_menu = resolve_cursor_speeds(
+        cfg, hd_mode=False, menu_mode=True
+    )
     poll_hz = max(20, int(cfg["poll_hz"]))
     poll_sec = 1.0 / poll_hz
     refresh_sec = float(cfg.get("session_refresh_sec", DEFAULTS["session_refresh_sec"]))
@@ -1788,7 +1982,15 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     pad_activity: dict[str, float] = {}
 
     labels = ", ".join(p[0] for p in pads)
-    log(f"gamepads: {labels} on DISPLAY={display} (SELECT+WEST pause, SELECT+NORTH resume)")
+    log(
+        f"gamepads: {labels} on DISPLAY={display} "
+        f"(SELECT+WEST pause, SELECT+NORTH resume; "
+        f"cursor profile={'CRT' if crt_cursor_profile() else 'HD'}; "
+        f"HD {max_speed_hd}/{slow_speed_hd} menu {max_speed_hd_menu}/{slow_speed_hd_menu} "
+        f"CRT {max_speed_crt}/{slow_speed_crt} lobby {resolve_cursor_speeds(cfg, False, lobby_mode=True)[0]}/"
+        f"{resolve_cursor_speeds(cfg, False, lobby_mode=True)[1]} "
+        f"menu {max_speed_crt_menu}/{slow_speed_crt_menu} px/frame)"
+    )
     disable_fake_touchpad_pointers(display)
     prime_x_pointer(display)
     set_cursor_visible(True, display)
@@ -1830,12 +2032,16 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     select_modifier_was_down = False
     emu_menu_open = False
     all_fds = list(event_fds.keys())
+    cached_menu_wid = ""
+    last_menu_wid_scan = 0.0
+    menu_wid_scan_sec = 0.5
 
     try:
         while True:
             session.refresh(display)
             if not crt_paused() and not flycast_menu_cursor:
                 emu_menu_open = False
+                cached_menu_wid = ""
             if os.path.isfile(DISABLE) or not session.fc_running:
                 if left_held:
                     set_mouse_button(False, xdotool, 1)
@@ -1890,7 +2096,12 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             right_down = key_down(key_state, bind.btn_right)
             chat_modifier_down = r1_down and not select_down
             now = time.time()
-            menu_mode = session.crt_paused or flycast_menu_cursor
+            menu_mode = menu_mode_active(session, flycast_menu_cursor)
+            if menu_mode and now - last_menu_wid_scan >= menu_wid_scan_sec:
+                cached_menu_wid = menu_target_window_id(
+                    display, session.crt_paused, flycast_menu_cursor
+                )
+                last_menu_wid_scan = now
 
             if allow_click:
                 if left_down and not select_down and not chat_modifier_down and not left_held:
@@ -1948,14 +2159,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 session.refresh(display, force=True)
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
-                    snes_open = (
-                        hd_snes and (crt_paused() or not emu_menu_open)
-                    ) or (
-                        not hd_snes
-                        and not session.crt_paused
-                        and not crt_paused()
-                        and not emu_menu_open
-                    )
+                    if hd_snes:
+                        snes_open = not crt_paused()
+                    else:
+                        snes_open = (
+                            not session.crt_paused
+                            and not crt_paused()
+                            and not emu_menu_open
+                        )
                     if snes_open:
                         emu_menu_open = True
                         trigger_crt_esc_pause()
@@ -2004,9 +2215,10 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 session.refresh(display, force=True)
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
-                    snes_close = (hd_snes and (crt_paused() or emu_menu_open)) or (
-                        not hd_snes and crt_paused()
-                    )
+                    if hd_snes:
+                        snes_close = crt_paused()
+                    else:
+                        snes_close = crt_paused()
                     if snes_close:
                         emu_menu_open = False
                         trigger_crt_resume()
@@ -2136,6 +2348,19 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     deadzone_8bit,
                 )
                 fine_nudge = r2_slow_nudge(bind, key_state, axes, caps) and not chat_modifier_down
+                hd_mode = not crt_cursor_profile()
+                if hd_mode:
+                    fine_nudge = r1_slow_nudge(
+                        bind, key_state, axes, caps
+                    ) or fine_nudge
+                use_menu_speeds = menu_mode and not session.in_lobby
+                use_lobby_speeds = session.in_lobby and not use_menu_speeds
+                max_speed, slow_speed = resolve_cursor_speeds(
+                    cfg,
+                    hd_mode,
+                    menu_mode=use_menu_speeds,
+                    lobby_mode=use_lobby_speeds,
+                )
                 move_speed = slow_speed if fine_nudge else max_speed
                 dx = int(round(nx * move_speed))
                 dy = int(round(ny * move_speed))
@@ -2349,13 +2574,17 @@ def main() -> int:
     if cmd == "stop":
         daemon_stop()
         return 0
+    if cmd == "restart":
+        daemon_stop()
+        time.sleep(0.35)
+        return daemon_start()
     if cmd == "status":
         cmd_status()
         return 0
     if cmd == "probe":
         cfg = load_conf()
         return cmd_probe(str(cfg.get("device_match", "")))
-    sys.stderr.write("Usage: fightcade-pad-mouse daemon|stop|status|probe\n")
+    sys.stderr.write("Usage: fightcade-pad-mouse daemon|stop|restart|status|probe\n")
     return 1
 
 
