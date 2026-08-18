@@ -93,6 +93,10 @@ DEFAULTS = {
     "slow_speed_crt": 2,
     "max_speed_crt_lobby": 8,
     "slow_speed_crt_lobby": 2,
+    "max_speed_hd_lobby_drag": 14,
+    "slow_speed_hd_lobby_drag": 2,
+    "max_speed_crt_lobby_drag": 5,
+    "slow_speed_crt_lobby_drag": 1,
     "max_speed_crt_menu": 14,
     "slow_speed_crt_menu": 4,
     # Legacy aliases (apply to HD when max_speed_hd / slow_speed_hd omitted).
@@ -167,8 +171,9 @@ def resolve_cursor_speeds(
     hd_mode: bool,
     menu_mode: bool = False,
     lobby_mode: bool = False,
+    drag_mode: bool = False,
 ) -> tuple[float, float]:
-    """Return (max_speed, slow_speed) in pixels per poll for HD/CRT and lobby/menu."""
+    """Return (max_speed, slow_speed) in pixels per poll for HD/CRT and lobby/menu/drag."""
     if menu_mode:
         if hd_mode:
             max_sp = float(
@@ -195,6 +200,52 @@ def resolve_cursor_speeds(
             )
         return max_sp, slow_sp
     if lobby_mode:
+        if drag_mode:
+            if hd_mode:
+                max_sp = float(
+                    cfg.get(
+                        "max_speed_hd_lobby_drag",
+                        cfg.get(
+                            "max_speed_hd_lobby",
+                            cfg.get(
+                                "max_speed_hd",
+                                cfg.get("max_speed", DEFAULTS["max_speed_hd_lobby_drag"]),
+                            ),
+                        ),
+                    )
+                )
+                slow_sp = float(
+                    cfg.get(
+                        "slow_speed_hd_lobby_drag",
+                        cfg.get(
+                            "slow_speed_hd_lobby",
+                            cfg.get(
+                                "slow_speed_hd",
+                                cfg.get("slow_speed", DEFAULTS["slow_speed_hd_lobby_drag"]),
+                            ),
+                        ),
+                    )
+                )
+            else:
+                max_sp = float(
+                    cfg.get(
+                        "max_speed_crt_lobby_drag",
+                        cfg.get(
+                            "max_speed_crt_lobby",
+                            cfg.get("max_speed_crt", DEFAULTS["max_speed_crt_lobby_drag"]),
+                        ),
+                    )
+                )
+                slow_sp = float(
+                    cfg.get(
+                        "slow_speed_crt_lobby_drag",
+                        cfg.get(
+                            "slow_speed_crt_lobby",
+                            cfg.get("slow_speed_crt", DEFAULTS["slow_speed_crt_lobby_drag"]),
+                        ),
+                    )
+                )
+            return max_sp, slow_sp
         if hd_mode:
             max_sp = float(
                 cfg.get(
@@ -1288,6 +1339,7 @@ def r1_slow_nudge(
     """HD: slow cursor when R1 is held alone (lobby chat uses R1+face)."""
     if not r1_active(bind, keys):
         return False
+    # btn_left excluded: R1+SOUTH is lobby chat, not slow drag-scroll.
     for code in (
         bind.btn_left,
         bind.btn_right,
@@ -1315,11 +1367,10 @@ def r2_slow_nudge(
     axes: dict[int, int],
     caps: dict[int, tuple[int, int, int]],
 ) -> bool:
-    """Slow cursor only when R2 is held alone (no face buttons, select, etc.)."""
+    """Slow cursor when R2 is held alone, or R2+left click for lobby drag-scroll."""
     if not r2_active(bind, keys, axes, caps):
         return False
     for code in (
-        bind.btn_left,
         bind.btn_right,
         bind.btn_combo_west,
         bind.btn_combo_north,
@@ -2371,11 +2422,13 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     ) or fine_nudge
                 use_menu_speeds = menu_mode and not session.in_lobby
                 use_lobby_speeds = session.in_lobby and not use_menu_speeds
+                use_drag_speeds = use_lobby_speeds and left_held
                 max_speed, slow_speed = resolve_cursor_speeds(
                     cfg,
                     hd_mode,
                     menu_mode=use_menu_speeds,
                     lobby_mode=use_lobby_speeds,
+                    drag_mode=use_drag_speeds,
                 )
                 move_speed = slow_speed if fine_nudge else max_speed
                 dx = int(round(nx * move_speed))

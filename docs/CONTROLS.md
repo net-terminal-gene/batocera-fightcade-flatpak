@@ -86,6 +86,10 @@ resolution (under 1024px wide), not only during an active game.
 | `slow_speed_crt` | 2 | R2 slow mode (CRT) |
 | `max_speed_crt_lobby` | 8 | CRT Fightcade lobby |
 | `slow_speed_crt_lobby` | 2 | R2 slow (CRT lobby) |
+| `max_speed_hd_lobby_drag` | 14 | HD lobby drag-scroll (SOUTH held + stick) |
+| `slow_speed_hd_lobby_drag` | 2 | R2 slow (HD lobby drag-scroll) |
+| `max_speed_crt_lobby_drag` | 5 | CRT lobby drag-scroll (SOUTH held + stick) |
+| `slow_speed_crt_lobby_drag` | 1 | R2 slow (CRT lobby drag-scroll) |
 | `max_speed_crt_menu` | 14 | CRT emulator menus |
 | `slow_speed_crt_menu` | 4 | R2 slow (CRT menus) |
 
