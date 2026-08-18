@@ -48,7 +48,8 @@ CRT_DISABLE = "/userdata/system/configs/fightcade-switchres.disable"
 CRT_FORCE = "/userdata/system/configs/fightcade-switchres.force"
 _CRT_PROFILE_CACHE: bool | None = None
 _CRT_PROFILE_AT = 0.0
-_CRT_PROFILE_TTL = 5.0
+_CRT_PROFILE_SWITCHRES: bool | None = None
+_CRT_PROFILE_TTL = 30.0
 
 CRT_PAUSEFILE = "/tmp/fightcade-switchres-wrap.pause"
 CRT_STATEFILE = "/tmp/fightcade-switchres-wrap.state"
@@ -1006,34 +1007,49 @@ def crt_switchres_active() -> bool:
     return False
 
 
-def crt_cursor_profile() -> bool:
-    """CRT speed table when Switchres is in use (lobby + gameplay), not only mid-game."""
-    global _CRT_PROFILE_CACHE, _CRT_PROFILE_AT
+def desktop_width_from_xrandr(display: str) -> int | None:
+    """Read-only desktop width; never call batocera-resolution from the 60 Hz loop."""
+    try:
+        out = subprocess.run(
+            ["xrandr"],
+            env={**os.environ, "DISPLAY": display},
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode != 0:
+            return None
+        m = re.search(r"current (\d+) x \d+", out.stdout)
+        return int(m.group(1)) if m else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def crt_cursor_profile(display: str) -> bool:
+    """CRT speed table when Switchres is available and desktop is sub-1024p."""
+    global _CRT_PROFILE_CACHE, _CRT_PROFILE_AT, _CRT_PROFILE_SWITCHRES
+    switchres_active = crt_switchres_active()
     now = time.monotonic()
-    if _CRT_PROFILE_CACHE is not None and now - _CRT_PROFILE_AT < _CRT_PROFILE_TTL:
+    if (
+        _CRT_PROFILE_CACHE is not None
+        and _CRT_PROFILE_SWITCHRES == switchres_active
+        and now - _CRT_PROFILE_AT < _CRT_PROFILE_TTL
+    ):
         return _CRT_PROFILE_CACHE
     profile = False
     if not os.path.isfile(CRT_DISABLE):
         if os.path.isfile(CRT_FORCE):
             profile = True
+        elif switchres_active:
+            profile = True
         elif os.path.isfile("/usr/bin/switchres"):
-            try:
-                out = subprocess.run(
-                    ["batocera-resolution", "currentResolution"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                    check=False,
-                )
-                if out.returncode == 0:
-                    res = out.stdout.strip()
-                    w = res.split("x", 1)[0]
-                    if w.isdigit() and int(w) < 1024:
-                        profile = True
-            except (OSError, subprocess.SubprocessError):
-                pass
+            w = desktop_width_from_xrandr(display)
+            if w is not None and w < 1024:
+                profile = True
     _CRT_PROFILE_CACHE = profile
     _CRT_PROFILE_AT = now
+    _CRT_PROFILE_SWITCHRES = switchres_active
     return profile
 
 
@@ -1985,7 +2001,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     log(
         f"gamepads: {labels} on DISPLAY={display} "
         f"(SELECT+WEST pause, SELECT+NORTH resume; "
-        f"cursor profile={'CRT' if crt_cursor_profile() else 'HD'}; "
+        f"cursor profile={'CRT' if crt_cursor_profile(display) else 'HD'}; "
         f"HD {max_speed_hd}/{slow_speed_hd} menu {max_speed_hd_menu}/{slow_speed_hd_menu} "
         f"CRT {max_speed_crt}/{slow_speed_crt} lobby {resolve_cursor_speeds(cfg, False, lobby_mode=True)[0]}/"
         f"{resolve_cursor_speeds(cfg, False, lobby_mode=True)[1]} "
@@ -2348,7 +2364,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     deadzone_8bit,
                 )
                 fine_nudge = r2_slow_nudge(bind, key_state, axes, caps) and not chat_modifier_down
-                hd_mode = not crt_cursor_profile()
+                hd_mode = not crt_cursor_profile(display)
                 if hd_mode:
                     fine_nudge = r1_slow_nudge(
                         bind, key_state, axes, caps
