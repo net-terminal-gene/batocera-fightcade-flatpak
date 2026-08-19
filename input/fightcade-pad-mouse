@@ -1021,10 +1021,15 @@ def crt_switchres_active() -> bool:
 
 
 def desktop_width_from_xrandr(display: str) -> int | None:
-    """Read-only desktop width; never call batocera-resolution from the 60 Hz loop."""
+    """Read-only desktop width; never call batocera-resolution from the 60 Hz loop.
+
+    Uses --current (GetScreenResourcesCurrent) so the server answers from state it
+    already holds. A plain xrandr call re-probes the connectors, which flashes a CRT
+    every time this cache expires.
+    """
     try:
         out = subprocess.run(
-            ["xrandr"],
+            ["xrandr", "--current"],
             env={**os.environ, "DISPLAY": display},
             capture_output=True,
             text=True,
