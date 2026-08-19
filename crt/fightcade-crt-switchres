@@ -894,6 +894,80 @@ fightcade_reassert_fbneo_window() {
     fightcade_reassert_wine_emu_window 'FBNeo' "$1" "$2"
 }
 
+fightcade_wine_emu_wid() {
+    local emu="$1" pattern disp
+    command -v xdotool >/dev/null 2>&1 || return 1
+    pattern=$(wine_emu_window_pattern "$emu")
+    [ -n "$pattern" ] || return 1
+    disp=$(fightcade_pick_display)
+    DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1
+}
+
+fightcade_wine_emu_title() {
+    local emu="$1" wid disp
+    wid=$(fightcade_wine_emu_wid "$emu") || return 1
+    [ -n "$wid" ] || return 1
+    disp=$(fightcade_pick_display)
+    DISPLAY="$disp" xdotool getwindowname "$wid" 2>/dev/null
+}
+
+# FBNeo fullscreen carries the bare app title; windowed-with-menu appends the build
+# version and game name. Spectate (quark:stream) recreates its window after Switchres
+# and can settle in the windowed state, which looks oversized on a 384x224 CRT mode.
+fightcade_fbneo_windowed_with_menu() {
+    local emu="$1" title
+    case "$emu" in
+        fbneo | ggpofba) ;;
+        *) return 1 ;;
+    esac
+    title=$(fightcade_wine_emu_title "$emu") || return 1
+    [ -n "$title" ] || return 1
+    case "$title" in
+        *'no game loaded'*) return 1 ;;
+    esac
+    case "$title" in
+        *'FBNeo v'*) return 0 ;;
+    esac
+    return 1
+}
+
+FBNEO_FS_ATTEMPTS=0
+FBNEO_FS_MAX=5
+
+# Menu keys alone do not leave the windowed state, and re-running switchres on its own
+# is a no-op ("mode already exist"). Deleting the SR- modes first forces a real mode
+# teardown, which is what makes FBNeo rebuild its window at the CRT mode. Capped per
+# session so a persistent failure cannot thrash the display.
+fightcade_fbneo_recover_fullscreen() {
+    local emu="$1" ini="$2"
+
+    fightcade_fbneo_windowed_with_menu "$emu" || return 0
+    [ "$FBNEO_FS_ATTEMPTS" -ge "$FBNEO_FS_MAX" ] && return 1
+    [ -n "${W:-}" ] && [ -n "${H:-}" ] && [ -n "${R:-}" ] || return 1
+    FBNEO_FS_ATTEMPTS=$((FBNEO_FS_ATTEMPTS + 1))
+
+    printf '%s fbneo windowed after switchres; recovering (attempt %s/%s)\n' \
+        "$(date '+%F %T')" "$FBNEO_FS_ATTEMPTS" "$FBNEO_FS_MAX" >> "$LOG_FILE"
+
+    export DISPLAY=$(fightcade_pick_display)
+    fightcade_drop_stale_switchres_modes
+    /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+    fightcade_reassert_switchres_output "$W" "$H"
+    patch_wine_ini "$ini" "$W" "$H"
+    fightcade_refresh_wine_emu_video "$emu" "$W" "$H"
+    fightcade_wine_emu_resume_keys "$emu" full
+    sleep 1
+
+    if fightcade_fbneo_windowed_with_menu "$emu"; then
+        printf '%s fbneo still windowed after recovery attempt %s\n' \
+            "$(date '+%F %T')" "$FBNEO_FS_ATTEMPTS" >> "$LOG_FILE"
+        return 1
+    fi
+    printf '%s fbneo fullscreen recovered on attempt %s\n' \
+        "$(date '+%F %T')" "$FBNEO_FS_ATTEMPTS" >> "$LOG_FILE"
+    return 0
+}
+
 crt_is_paused() {
     [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]
 }
@@ -1225,7 +1299,7 @@ fightcade_dispatch() {
 fightcade_monitor_play() {
     local URL="$1"
     local emu rom ini snes9x_conf flycast_cfg active
-    local emu_deadline emu_found restore_done=0
+    local emu_deadline emu_found restore_done=0 fs_tick=0
 
     URL=$(fightcade_normalize_url "$URL")
 
@@ -1294,6 +1368,7 @@ fightcade_monitor_play() {
     fightcade_reassert_switchres_output "$W" "$H"
     sleep 4
     fightcade_reassert_switchres_output "$W" "$H"
+    fightcade_fbneo_recover_fullscreen "$emu" "$ini" || true
 
     if crt_wine_menu_emu "$emu" && command -v evtest >/dev/null 2>&1; then
         start_crt_hotkey_watch "${PRE_MODE:-}" "${PRE_RES:-}" "$W" "$H" "$R" "$emu" "$ini" "$snes9x_conf"
@@ -1314,6 +1389,14 @@ fightcade_monitor_play() {
         if [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]; then
             sleep 0.4
             continue
+        fi
+        # Spectate can drop back to the windowed state well after Switchres settles
+        # (stream reconnects recreate the window). Paused sessions are skipped above,
+        # so a deliberately opened menu is never forced shut.
+        fs_tick=$((fs_tick + 1))
+        if [ "$fs_tick" -ge 5 ]; then
+            fs_tick=0
+            fightcade_fbneo_recover_fullscreen "$emu" "$ini" || true
         fi
         if [ "$emu" = "flycast" ]; then
             if flycast_game_loaded; then
