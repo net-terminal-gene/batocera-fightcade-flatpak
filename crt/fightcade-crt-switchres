@@ -603,6 +603,22 @@ fightcade_ensure_menu_baseline() {
     fi
 }
 
+# True when the output already scans out at w x h. Read from the output's own geometry
+# ("DVI-I-1 connected primary 256x224+0+0"), not the X screen size: the screen never
+# goes below the server's 320px minimum, so a 256-wide mode leaves the screen at
+# 320x224 and a screen-size comparison can never confirm it.
+fightcade_output_mode_is() {
+    local out="$1" w="$2" h="$3"
+    [ -n "$out" ] && [ -n "$w" ] && [ -n "$h" ] || return 1
+    xrandr 2>/dev/null | awk -v O="$out" -v G="${w}x${h}+" '
+        $1 == O && $2 == "connected" {
+            for (i = 3; i <= NF; i++)
+                if (index($i, G) == 1) { found = 1; exit }
+        }
+        END { exit !found }
+    '
+}
+
 fightcade_reassert_switchres_output() {
     local out mode w h i
     w="$1"
@@ -611,15 +627,16 @@ fightcade_reassert_switchres_output() {
     export DISPLAY=$(fightcade_pick_display)
     out=$(batocera-resolution currentOutput 2>/dev/null)
     [ -z "$out" ] && out="DP-1"
+    # Every xrandr modeset makes the CRT drop and relock sync, which is a visible
+    # flash, so verify before touching the mode instead of setting it unconditionally.
+    fightcade_output_mode_is "$out" "$w" "$h" && return 0
     for i in 1 2 3 4 5 6; do
         mode=$(xrandr 2>/dev/null | awk -v W="$w" -v H="$h" '$1 ~ /^SR-/ && index($1, W "x" H) { print $1; exit }')
         [ -z "$mode" ] && mode=$(xrandr 2>/dev/null | awk '$1 ~ /^SR-/ { print $1; exit }')
         [ -z "$mode" ] && return 0
         xrandr --output "$out" --mode "$mode" 2>/dev/null || true
         sleep 0.22
-        if xrandr 2>/dev/null | head -1 | grep -q "current ${w} x ${h}"; then
-            return 0
-        fi
+        fightcade_output_mode_is "$out" "$w" "$h" && return 0
     done
 }
 
