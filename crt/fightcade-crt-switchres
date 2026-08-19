@@ -752,9 +752,11 @@ fightcade_flycast_game_begin() {
     fightcade_cursor_hide
 }
 
+# Flycast Dojo drives its in-game menu with SELECT and never needs a pointer, so the
+# cursor stays hidden for the whole session. Only session cleanup restores it for the
+# lobby; showing it here would flash a pointer whenever a game unloads mid-session.
 fightcade_flycast_game_end() {
     rm -f "$FLYCAST_GAME_FLAG"
-    fightcade_cursor_show
 }
 
 fightcade_kill_wine_orphans() {
@@ -1330,6 +1332,7 @@ fightcade_monitor_play() {
         export DISPLAY=$(fightcade_pick_display)
         stop_crt_hotkey_watch
         fightcade_flycast_game_end
+        fightcade_cursor_show
         rm -f "$MONITOR_PIDFILE"
         restore_ini "$ini"
         restore_snes9x_conf "$snes9x_conf"
@@ -1359,6 +1362,10 @@ fightcade_monitor_play() {
     if crt_wine_menu_emu "$emu"; then
         touch "$FBNEO_ACTIVE_FLAG"
     fi
+
+    # Hide as soon as Flycast is up, not once a game is loaded: the boot and Dojo
+    # screens do not need a pointer either.
+    [ "$emu" = "flycast" ] && fightcade_cursor_hide
 
     export DISPLAY=$(fightcade_pick_display)
     fightcade_prep_x_before_switchres

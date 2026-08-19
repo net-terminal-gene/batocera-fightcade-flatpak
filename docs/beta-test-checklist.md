@@ -124,16 +124,21 @@ Chat still needs a keyboard. If gamepad navigation does nothing, check
 
 ### Flycast (Dreamcast / Naomi / Atomiswave)
 
+Dojo provides its own in-game menu and quits from it, so Flycast uses no pad cursor
+and no pause combos.
+
 **While playing:**
 
-- [ ] **SELECT + WEST** opens the Flycast menu overlay
-- [ ] **SELECT + NORTH** resumes the game (Dreamcast titles)
+- [ ] **SELECT** opens Dojo's in-game menu
+- [ ] Quitting the game from Dojo's menu returns to the lobby
+- [ ] **SELECT + Start** still quits the emulator
 
-**While Flycast menu is open:**
+**No cursor at any point:**
 
-- [ ] Menu cursor navigation works
-- [ ] **SELECT + WEST** / **SELECT + NORTH** toggle the menu overlay as expected
-- [ ] **SELECT + right shoulder** cycles window focus (where applicable)
+- [ ] No pointer during Flycast boot or Dojo menu screens
+- [ ] No pointer appears when pressing **SELECT**
+- [ ] **SELECT + WEST** / **SELECT + NORTH** do nothing in Flycast
+- [ ] Lobby pointer works again after returning from Flycast
 
 ---
 

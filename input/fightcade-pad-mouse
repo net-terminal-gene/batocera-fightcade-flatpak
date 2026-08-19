@@ -287,13 +287,8 @@ def resolve_cursor_speeds(
     return max_sp, slow_sp
 
 
-def menu_mode_active(
-    session: "SessionState",
-    flycast_menu_cursor: bool,
-) -> bool:
+def menu_mode_active(session: "SessionState") -> bool:
     """True when navigating an emulator menu with the pad cursor (no xdotool)."""
-    if flycast_menu_cursor:
-        return True
     return crt_paused() and not session.in_lobby
 
 
@@ -519,33 +514,7 @@ def focus_snes9x_window(display: str) -> bool:
     return True
 
 
-def focus_flycast_window(display: str) -> bool:
-    wid = xdotool_first_window_by_name(display, "flycast")
-    if not wid:
-        return False
-    activate_x_window(display, wid)
-    return True
-
-
-def focus_menu_target(
-    display: str,
-    crt_paused: bool,
-    flycast_menu_cursor: bool,
-) -> bool:
-    if flycast_menu_cursor:
-        return focus_flycast_window(display)
-    if crt_paused:
-        return focus_wine_menu_emulator(display)
-    return False
-
-
-def menu_target_window_id(
-    display: str,
-    crt_paused: bool,
-    flycast_menu_cursor: bool,
-) -> str:
-    if flycast_menu_cursor:
-        return xdotool_first_window_by_name(display, "flycast")
+def menu_target_window_id(display: str, crt_paused: bool) -> str:
     if crt_paused:
         if fightcade_fbneo_running():
             return xdotool_first_window_by_name(display, "FBNeo")
@@ -743,24 +712,16 @@ def raise_wine_dialog_for_click(display: str, menu_wid: str) -> None:
     prime_x_pointer(display)
 
 
-def resolve_menu_click(
-    display: str,
-    crt_paused: bool,
-    flycast_menu_cursor: bool,
-) -> tuple[str, str]:
+def resolve_menu_click(display: str, crt_paused: bool) -> tuple[str, str]:
     """(click_window, menu_window) for menu-mode pointer clicks."""
-    menu_wid = menu_target_window_id(display, crt_paused, flycast_menu_cursor)
+    menu_wid = menu_target_window_id(display, crt_paused)
     if not menu_wid:
         return window_under_cursor(display), ""
     return emu_window_at_pointer(display, menu_wid), menu_wid
 
 
-def menu_click_window_id(
-    display: str,
-    crt_paused: bool,
-    flycast_menu_cursor: bool,
-) -> str:
-    click_wid, _menu_wid = resolve_menu_click(display, crt_paused, flycast_menu_cursor)
+def menu_click_window_id(display: str, crt_paused: bool) -> str:
+    click_wid, _menu_wid = resolve_menu_click(display, crt_paused)
     return click_wid
 
 
@@ -840,6 +801,7 @@ class SessionState:
         self.fc_running = False
         self.fbneo_running = False
         self.snes9x_running = False
+        self.flycast_running = False
         self.fbneo_active = False
         self.flycast_game_active = False
         self.crt_paused = False
@@ -850,6 +812,7 @@ class SessionState:
         self.fc_running = procs["fc"]
         self.fbneo_running = procs["fbneo"]
         self.snes9x_running = procs["snes9x"]
+        self.flycast_running = procs["flycast"]
 
     def refresh(self, display: str, force: bool = False) -> None:
         now = time.monotonic()
@@ -923,12 +886,14 @@ class SessionState:
         if not self.crt_paused:
             self.focus_name = read_focused_window_name(display)
 
-    def lobby_mouse_allowed(self, flycast_menu_cursor: bool) -> bool:
-        if self.crt_paused or flycast_menu_cursor:
+    def lobby_mouse_allowed(self) -> bool:
+        # Flycast Dojo has its own in-game menu on SELECT and can quit from it, so no
+        # pointer is ever wanted while Flycast runs, including its boot and menu screens.
+        if self.flycast_running:
+            return False
+        if self.crt_paused:
             return True
         if wine_menu_emu_in_focus(self.focus_name):
-            return False
-        if self.flycast_game_active and "flycast" in self.focus_name.lower():
             return False
         return True
 
@@ -939,9 +904,6 @@ class SessionState:
 
     def fbneo_combo_available(self) -> bool:
         return self.wine_menu_emu_combo_available()
-
-    def flycast_combo_available(self) -> bool:
-        return self.flycast_game_active
 
 
 class XdotoolClient:
@@ -1587,14 +1549,10 @@ def resolve_pad_bindings(
     return bindings
 
 
-def alt_tab_allowed(
-    session: SessionState,
-    allow_mouse: bool,
-    flycast_menu_cursor: bool,
-) -> bool:
+def alt_tab_allowed(session: SessionState, allow_mouse: bool) -> bool:
     if not session.fc_running:
         return False
-    if session.in_lobby or session.crt_paused or flycast_menu_cursor:
+    if session.in_lobby or session.crt_paused:
         return True
     return allow_mouse
 
@@ -2094,7 +2052,6 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     r1_was_down = False
     start_was_down = False
     cursor_visible = True
-    flycast_menu_cursor = False
     select_was_down = False
     select_modifier_was_down = False
     emu_menu_open = False
@@ -2106,7 +2063,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     try:
         while True:
             session.refresh(display)
-            if not crt_paused() and not flycast_menu_cursor:
+            if not crt_paused():
                 emu_menu_open = False
                 cached_menu_wid = ""
             if os.path.isfile(DISABLE) or not session.fc_running:
@@ -2119,22 +2076,18 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 if not cursor_visible:
                     set_cursor_visible(True, display)
                     cursor_visible = True
-                flycast_menu_cursor = False
                 time.sleep(0.5)
                 continue
-
-            if not session.flycast_game_active:
-                flycast_menu_cursor = False
 
             if session.in_lobby:
                 # Skip cursor hide/show and focus checks; lobby mouse is always on.
                 allow_mouse = True
                 allow_click = True
-            elif crt_paused() or flycast_menu_cursor:
+            elif crt_paused():
                 allow_mouse = True
                 allow_click = True
             else:
-                allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                allow_mouse = session.lobby_mouse_allowed()
                 allow_click = allow_mouse
             if not session.in_lobby:
                 want_cursor = allow_mouse
@@ -2163,18 +2116,16 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             right_down = key_down(key_state, bind.btn_right)
             chat_modifier_down = r1_down and not select_down
             now = time.time()
-            menu_mode = menu_mode_active(session, flycast_menu_cursor)
+            menu_mode = menu_mode_active(session)
             if menu_mode and now - last_menu_wid_scan >= menu_wid_scan_sec:
-                cached_menu_wid = menu_target_window_id(
-                    display, session.crt_paused, flycast_menu_cursor
-                )
+                cached_menu_wid = menu_target_window_id(display, session.crt_paused)
                 last_menu_wid_scan = now
 
             if allow_click:
                 if left_down and not select_down and not chat_modifier_down and not left_held:
                     if menu_mode:
                         click_wid, menu_wid = resolve_menu_click(
-                            display, session.crt_paused, flycast_menu_cursor
+                            display, session.crt_paused
                         )
                         if menu_wid and click_wid and click_wid != menu_wid:
                             raise_wine_dialog_for_click(display, menu_wid)
@@ -2190,7 +2141,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 if right_down and not select_down and not chat_modifier_down and not right_held:
                     if menu_mode:
                         click_wid, menu_wid = resolve_menu_click(
-                            display, session.crt_paused, flycast_menu_cursor
+                            display, session.crt_paused
                         )
                         if menu_wid and click_wid and click_wid != menu_wid:
                             raise_wine_dialog_for_click(display, menu_wid)
@@ -2239,9 +2190,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                         trigger_crt_esc_pause()
                         focus_snes9x_window(display)
                         session.refresh(display, force=True)
-                        allow_mouse = session.lobby_mouse_allowed(
-                            flycast_menu_cursor
-                        )
+                        allow_mouse = session.lobby_mouse_allowed()
                         allow_click = allow_mouse
                         last_pause_at = now
                         set_cursor_visible(True, display)
@@ -2256,21 +2205,12 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     emu_menu_open = True
                     trigger_crt_esc_pause()
                     session.refresh(display, force=True)
-                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                    allow_mouse = session.lobby_mouse_allowed()
                     allow_click = allow_mouse
                     last_pause_at = now
                     set_cursor_visible(True, display)
                     cursor_visible = True
                     log("SELECT+WEST opened emulator menu (ESC)")
-                elif session.flycast_combo_available() and not flycast_menu_cursor:
-                    flycast_menu_cursor = True
-                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
-                    allow_click = allow_mouse
-                    last_pause_at = now
-                    set_cursor_visible(True, display)
-                    cursor_visible = True
-                    focus_flycast_window(display)
-                    log("SELECT+WEST Flycast menu cursor on")
             pause_combo_was_active = pause_active
 
             resume_active = select_down and key_down(key_state, bind.btn_combo_north)
@@ -2290,9 +2230,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                         emu_menu_open = False
                         trigger_crt_resume()
                         session.refresh(display, force=True)
-                        allow_mouse = session.lobby_mouse_allowed(
-                            flycast_menu_cursor
-                        )
+                        allow_mouse = session.lobby_mouse_allowed()
                         allow_click = allow_mouse
                         last_resume_at = now
                         set_cursor_visible(False, display)
@@ -2302,49 +2240,24 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     emu_menu_open = False
                     trigger_crt_resume()
                     session.refresh(display, force=True)
-                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
+                    allow_mouse = session.lobby_mouse_allowed()
                     allow_click = allow_mouse
                     last_resume_at = now
                     set_cursor_visible(False, display)
                     cursor_visible = False
                     log("SELECT+NORTH closed emulator menu (resume)")
-                elif session.flycast_combo_available() and flycast_menu_cursor:
-                    flycast_menu_cursor = False
-                    clear_crt_pause()
-                    allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
-                    allow_click = allow_mouse
-                    last_resume_at = now
-                    set_cursor_visible(False, display)
-                    cursor_visible = False
-                    log("SELECT+NORTH Flycast menu cursor off")
             resume_combo_was_active = resume_active
 
             active_axes = axes_by_pad[active_path]
             active_caps = axis_caps_by_pad[active_path]
             r2_down = r2_active(bind, key_state, active_axes, active_caps)
 
-            if (
-                session.flycast_combo_available()
-                and select_down
-                and not select_was_down
-                and not key_down(key_state, bind.btn_combo_west)
-                and not key_down(key_state, bind.btn_combo_north)
-                and not r1_down
-                and not r2_down
-                and not start_down
-            ):
-                flycast_menu_cursor = True
-                allow_mouse = session.lobby_mouse_allowed(flycast_menu_cursor)
-                allow_click = allow_mouse
-                set_cursor_visible(True, display)
-                cursor_visible = True
-                focus_flycast_window(display)
             modifier_edge = modifier_down and not select_modifier_was_down
             select_modifier_was_down = modifier_down
             select_was_down = select_down
             r1_edge = r1_down and not r1_was_down
 
-            allow_tab = alt_tab_allowed(session, allow_mouse, flycast_menu_cursor)
+            allow_tab = alt_tab_allowed(session, allow_mouse)
             if (
                 allow_tab
                 and modifier_down

@@ -67,7 +67,8 @@ you set in **ES Controller Mapping** for that pad. The **slot → action** table
 does not change; only which physical button you assign to each slot changes.
 
 **Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
-= emulator menu bar visible. **Flycast menu** = in-game overlay with cursor visible.
+= emulator menu bar visible. Flycast Dojo has its own in-game menu on **SELECT** and
+quits from it, so Flycast uses no pad cursor and no pause combos.
 
 **Cursor speed:** move the stick or D-pad normally for fast cursor movement. Hold **R1**
 alone (HD) or **R2** alone (CRT) while moving the stick or D-pad for slow, precise movement.
@@ -181,8 +182,11 @@ View or change global bindings: `batocera-joysticks-hotkeys` (see
 | **FBNeo menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) | Quit emulator (lobby) |
 | **SNES playing** | — | — | — | — | Open Snes9x menu (ESC) | — | — | Quit emulator (lobby) |
 | **SNES menu open** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | Resume game | Alt+Tab (cycle windows) | Quit emulator (lobby) |
-| **Flycast playing** | — | — | — | — | Open menu | Resume game | — | Quit emulator (lobby) |
-| **Flycast menu** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | Open menu | Resume game | — | Quit emulator (lobby) |
+| **Flycast (Dojo)** | — | — | — | — | — | — | — | Quit emulator (lobby) |
+
+Flycast is handled by Dojo itself: **SELECT** opens its in-game menu, which also quits
+the game. No cursor is shown at any point in a Flycast session, and SELECT + WEST /
+NORTH do nothing there.
 
 CRT users: **ESC** and **Alt+Delete** for FBNeo/SNES menus at native resolution are
 documented in [CRT.md — Keyboard](CRT.md#keyboard-fbneo--snes).
