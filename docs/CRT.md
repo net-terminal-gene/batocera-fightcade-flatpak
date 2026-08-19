@@ -6,9 +6,13 @@
 > timing and per-game native resolution switching will not work.
 
 Fightcade's playable library is **4:3** and was authored for **CRTs at native
-resolutions** (arcade modelines, 256×224 SNES, Naomi, and the rest). Switchres on
+resolutions** (arcade modelines, 256×224 SNES, and the rest). Switchres on
 Batocera restores that model: **menu timing for the lobby**, **per-game modelines
 for gameplay**, then back to the lobby when the session ends.
+
+Flycast is the exception: every Dreamcast, Naomi, Naomi 2, and Atomiswave title is
+640×480, which is already the lobby resolution, so Flycast plays at lobby timing with
+no mode change at all.
 
 On CRT setups the installer gives Fightcade native-resolution switching during
 gameplay, matching how Batocera's own emulators behave on a CRT. The Fightcade

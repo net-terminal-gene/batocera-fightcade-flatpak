@@ -693,6 +693,17 @@ fightcade_running_wine_menu_emu() {
     return 1
 }
 
+# Emulators that need a Switchres modeset. Flycast is excluded: every Naomi, Naomi 2,
+# Atomiswave and Dreamcast title reports 640x480, which is already the lobby mode
+# (641x480 interlaced, 525 total lines), so Switchres would only shift refresh from
+# 60.00 to 61.26 Hz while costing a mode change in and another on the way out.
+crt_switchres_emu() {
+    case "$1" in
+        flycast) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 # Wine emulators that use ESC / Alt+Delete / Alt+Enter for in-game menus (FBNeo-style).
 crt_wine_menu_emu() {
     case "$1" in
@@ -856,9 +867,11 @@ fightcade_reassert_switchres_session() {
     export DISPLAY=$(fightcade_pick_display)
     emu="${EMU:-}"
     ini="${INI_PATH:-}"
-    fightcade_drop_stale_switchres_modes
-    /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
-    fightcade_reassert_switchres_output "$W" "$H"
+    if crt_switchres_emu "$emu"; then
+        fightcade_drop_stale_switchres_modes
+        /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+        fightcade_reassert_switchres_output "$W" "$H"
+    fi
     case "$emu" in
         fbneo|ggpofba)
             patch_wine_ini "$ini" "$W" "$H"
@@ -1359,7 +1372,11 @@ fightcade_monitor_play() {
         restore_ini "$ini"
         restore_snes9x_conf "$snes9x_conf"
         restore_flycast_cfg "$flycast_cfg"
-        restore_display_mode "${PRE_MODE:-}" "${PRE_RES:-}"
+        # Nothing to restore when the session never left the lobby mode, and
+        # restore_display_mode always issues a modeset, which would flash for nothing.
+        if crt_switchres_emu "$emu"; then
+            restore_display_mode "${PRE_MODE:-}" "${PRE_RES:-}"
+        fi
         fightcade_clear_session_state
         restore_done=1
     }
@@ -1390,14 +1407,17 @@ fightcade_monitor_play() {
     [ "$emu" = "flycast" ] && fightcade_cursor_hide
 
     export DISPLAY=$(fightcade_pick_display)
-    fightcade_prep_x_before_switchres
 
-    fightcade_drop_stale_switchres_modes
-    /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
-    fightcade_reassert_switchres_output "$W" "$H"
-    sleep 4
-    fightcade_reassert_switchres_output "$W" "$H"
-    fightcade_fbneo_recover_fullscreen "$emu" "$ini" || true
+    if crt_switchres_emu "$emu"; then
+        fightcade_prep_x_before_switchres
+
+        fightcade_drop_stale_switchres_modes
+        /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+        fightcade_reassert_switchres_output "$W" "$H"
+        sleep 4
+        fightcade_reassert_switchres_output "$W" "$H"
+        fightcade_fbneo_recover_fullscreen "$emu" "$ini" || true
+    fi
 
     if crt_wine_menu_emu "$emu" && command -v evtest >/dev/null 2>&1; then
         start_crt_hotkey_watch "${PRE_MODE:-}" "${PRE_RES:-}" "$W" "$H" "$R" "$emu" "$ini" "$snes9x_conf"

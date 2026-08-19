@@ -279,7 +279,9 @@ you have ROMs and BIOS. Filter by system in Fightcade: Search 🔍 → Filter �
 ### Emulator coverage (CRT)
 
 - [ ] **FBNeo** tested in at least one session path above (not only arcade)
-- [ ] At least one of **SNES** or **Flycast** tested on CRT in at least one session path
+- [ ] **SNES** tested on CRT in at least one session path
+- [ ] **Flycast**: game fills the screen at lobby timing with no mode change (Flycast
+  content is already 640×480, so no modeline is applied and none is restored on exit)
 
 ### Switchres on/off (CRT)
 
