@@ -262,6 +262,13 @@ if flatpak override --system --show "${APP_ID}" >/dev/null 2>&1; then
         fail "No filesystem overrides found for ${APP_ID}"
         any_fail=1
     fi
+
+    if flatpak override --system --show "${APP_ID}" 2>/dev/null | grep -q '^vblank_mode=3'; then
+        pass "Forced vsync override: vblank_mode=3"
+    else
+        fail "Missing vblank_mode=3 override (SNES will tear on CRT); re-run install.sh"
+        any_fail=1
+    fi
 else
     fail "Could not read overrides for ${APP_ID}"
     any_fail=1

@@ -263,7 +263,10 @@ for path in "${local_paths[@]}"; do
     flatpak override --system --nofilesystem="${path}" "${APP_ID}" 2>/dev/null || true
 done
 
-ok "Flatpak filesystem overrides removed"
+# Drop the forced-vsync env override applied by install.sh.
+flatpak override --system --unset-env=vblank_mode "${APP_ID}" 2>/dev/null || true
+
+ok "Flatpak overrides removed"
 
 # ---------------------------------------------------------------------------
 # 5. Remove installer scripts

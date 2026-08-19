@@ -168,6 +168,11 @@ patch_snes9x_conf() {
     sed -i 's/^\([[:space:]]*Stretch:MaintainAspectRatio[[:space:]]*=\).*/\1 FALSE/' "$conf"
     sed -i 's/^\([[:space:]]*Stretch:BilinearFilter[[:space:]]*=\).*/\1 FALSE/' "$conf"
     sed -i "s/^\([[:space:]]*OutputMethod[[:space:]]*=\).*/\1 0/" "$conf"
+    # Tearing is fixed by the forced driver vsync (vblank_mode=3, applied by
+    # install.sh), which gates buffer swaps; these two give it a buffered swap to
+    # gate rather than a blit straight to the front buffer.
+    sed -i 's/^\([[:space:]]*Vsync[[:space:]]*=\).*/\1 TRUE/' "$conf"
+    sed -i 's/^\([[:space:]]*Fullscreen:DoubleBuffered[[:space:]]*=\).*/\1 TRUE/' "$conf"
 }
 
 restore_snes9x_conf() {

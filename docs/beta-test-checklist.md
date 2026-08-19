@@ -217,6 +217,7 @@ See [CRT.md](CRT.md) for controls, flags, and recovery.
 - [ ] `batocera-resolution getDisplayMode` reports **xorg**
 - [ ] Ports > Fightcade > Advanced Game Settings > Video Mode is at AUTO / CRT timing (not HD resolution) before opening Fightcade
 - [ ] `/userdata/system/fightcade-flatpak/fightcade-diagnose` shows CRT host watcher installed (and running while Fightcade is open)
+- [ ] `/userdata/system/fightcade-flatpak/fightcade-diagnose` reports the forced vsync override (`vblank_mode=3`)
 - [ ] Lobby controls from [gamepad checklist](#gamepad-and-menu-controls-all-testers) work at CRT menu timing
 - [ ] No Switchres flag files present (see [Switchres on/off](#switchres-onoff-crt) below):
   ```bash
@@ -244,6 +245,7 @@ While testing, watch `/userdata/system/logs/fightcade-crt-switchres.log` for
 
 - [ ] **TEST GAME** switches display to the game's **native modeline** (resolution + refresh)
 - [ ] Gameplay fills the CRT as expected for that title
+- [ ] Gameplay runs without vsync tearing, **SNES especially**
 - [ ] **SELECT + WEST** during gameplay: lobby timing + emulator menu (Switchres paused)
 - [ ] **SELECT + NORTH** from menu: native modeline restored, gameplay resumes
 - [ ] Exiting the game restores **lobby / menu timing**

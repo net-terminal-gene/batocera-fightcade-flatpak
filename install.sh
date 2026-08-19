@@ -363,6 +363,15 @@ apply_overrides() {
     done
 
     ok "Flatpak filesystem overrides applied"
+
+    # Snes9x renders through Wine DirectDraw (ddraw -> wined3d -> Mesa), and its vsync
+    # request does not survive that translation, which tears on CRT. vblank_mode=3 is
+    # Mesa's "force vsync on", applied regardless of what the application asks for.
+    if flatpak override --system --env=vblank_mode=3 "${APP_ID}" 2>/dev/null; then
+        ok "Forced vsync override applied (vblank_mode=3)"
+    else
+        warn "Could not apply vblank_mode override; SNES may tear on CRT"
+    fi
 }
 
 # ---------------------------------------------------------------------------
