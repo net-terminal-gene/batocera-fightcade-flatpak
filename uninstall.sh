@@ -12,22 +12,37 @@
 # Note: fightcade-pad-mouse may keep running until Fightcade is closed; the
 # project dir is removed so it cannot restart after uninstall.
 #
-# Does NOT remove:
+# Does NOT remove (default light uninstall):
 #   - The Fightcade Flatpak itself (use --uninstall-flatpak to also remove it)
 #   - Real ROMs or any user files
 #   - The ROMs/ scaffold directories (real dirs remain so Fightcade still starts)
+#
+# Full wipe (--purge, implies --uninstall-flatpak) ALSO removes:
+#   - The Flatpak app-data tree (config + downloaded game assets, hundreds of MB)
+#   - The EmulationStation launcher entry, artwork, and gamelist node in ROMs/flatpak
+#   - Fightcade logs (/userdata/system/logs) and configs (/userdata/system/configs)
+#   - Orphaned flatpak runtimes (only when no other flatpak app remains)
+#   - Dangling flatpak overrides and OSTree repo refs
+#   Real ROMs under /userdata/roms/* and /userdata/bios are NEVER touched.
 
 set -eu
 
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
 SCRIPTS_DIR="/userdata/system/scripts"
-FLATPAK_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+FLATPAK_APP_ROOT="/userdata/saves/flatpak/data/.var/app/${APP_ID}"
+FLATPAK_DATA="${FLATPAK_APP_ROOT}/data"
 ROMS_ROOT="${FLATPAK_DATA}/ROMs"
 HOST_ROMS="/userdata/roms"
+FLATPAK_ROMS="/userdata/roms/flatpak"
+FLATPAK_REPO="/userdata/saves/flatpak/binaries/repo"
+FLATPAK_OVERRIDES="/userdata/saves/flatpak/binaries/overrides"
+LOGS_DIR="/userdata/system/logs"
+CONFIGS_DIR="/userdata/system/configs"
 
 AUTO_YES=0
 UNINSTALL_FLATPAK=0
+PURGE=0
 
 info()   { printf '%s\n'       "$*"; }
 ok()     { printf '[ OK ] %s\n' "$*"; }
@@ -42,6 +57,9 @@ Usage: uninstall.sh [options]
 Options:
   -y, --yes               Accept all prompts automatically.
       --uninstall-flatpak Also uninstall the Fightcade Flatpak (com.fightcade.Fightcade).
+      --purge, --all      Full wipe: remove the app, its data tree, launcher entry,
+                          logs, configs, orphaned runtimes, and repo refs.
+                          Implies --uninstall-flatpak. Keeps roms and bios.
   -h, --help              Show this help.
 USAGE
 }
@@ -50,6 +68,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         -y|--yes)               AUTO_YES=1 ;;
         --uninstall-flatpak)    UNINSTALL_FLATPAK=1 ;;
+        --purge|--all)          PURGE=1; UNINSTALL_FLATPAK=1 ;;
         -h|--help)              usage; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
@@ -291,11 +310,86 @@ if [ "${UNINSTALL_FLATPAK}" -eq 1 ]; then
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# 7. Full purge (--purge): app data, ES launcher, logs, configs, runtimes, refs
+#    Every deletion below is pinned to an exact Fightcade path. Real ROMs under
+#    /userdata/roms/* and /userdata/bios are never touched.
+# ---------------------------------------------------------------------------
+if [ "${PURGE}" -eq 1 ]; then
+    notice "Purging all remaining Fightcade data..."
+
+    # Stop the pad-mouse daemon if it somehow survived the project-dir removal.
+    if pkill -f fightcade-pad-mouse 2>/dev/null; then
+        ok "Stopped fightcade-pad-mouse daemon"
+    fi
+
+    # Flatpak app-data tree: config + everything Fightcade downloaded (game assets).
+    if [ -d "$FLATPAK_APP_ROOT" ]; then
+        rm -rf "$FLATPAK_APP_ROOT"
+        ok "Removed Flatpak app data: ${FLATPAK_APP_ROOT}"
+    else
+        notice "Flatpak app data already absent"
+    fi
+
+    # EmulationStation launcher entry + artwork + stale gamelist backup.
+    rm -f "${FLATPAK_ROMS}/Fightcade.flatpak" \
+          "${FLATPAK_ROMS}/images/Fightcade-logo.png" \
+          "${FLATPAK_ROMS}/images/Fightcade-thumb.png" \
+          "${FLATPAK_ROMS}/images/Fightcade.png" \
+          "${FLATPAK_ROMS}/gamelist.xml.bak"
+    ok "Removed EmulationStation launcher entry and artwork"
+
+    # Drop the Fightcade <game> node from the flatpak gamelist (keep the file so
+    # the ES Flatpak system stays valid for other apps).
+    if [ -f "${FLATPAK_ROMS}/gamelist.xml" ] && \
+       grep -q "Fightcade.flatpak" "${FLATPAK_ROMS}/gamelist.xml"; then
+        cat > "${FLATPAK_ROMS}/gamelist.xml" <<'XML'
+<?xml version="1.0"?>
+<gameList>
+	<game>
+		<lang>en</lang>
+	</game>
+</gameList>
+XML
+        ok "Cleaned Fightcade entry from ${FLATPAK_ROMS}/gamelist.xml"
+    fi
+
+    # Fightcade logs and configs.
+    rm -f "${LOGS_DIR}"/fightcade-*.log \
+          "${CONFIGS_DIR}"/fightcade-*.conf
+    ok "Removed Fightcade logs and configs"
+
+    # Remove orphaned flatpak runtimes (Wine + Freedesktop pulled in for Fightcade),
+    # but only when no other flatpak app remains, so we never break another app.
+    if [ -z "$(flatpak list --app --columns=application 2>/dev/null)" ]; then
+        flatpak uninstall --system --unused -y >/dev/null 2>&1 || true
+        ok "Removed unused flatpak runtimes"
+    else
+        notice "Other flatpak apps present; kept shared runtimes"
+    fi
+
+    # Dangling override + OSTree repo refs left behind after the app is gone.
+    rm -f "${FLATPAK_OVERRIDES}/${APP_ID}"
+    rm -rf "${FLATPAK_REPO}/refs/heads/deploy/app/${APP_ID}" \
+           "${FLATPAK_REPO}/refs/heads/deploy/runtime/${APP_ID}.Locale" \
+           "${FLATPAK_REPO}/refs/remotes/flathub/app/${APP_ID}" \
+           "${FLATPAK_REPO}/refs/remotes/flathub/runtime/${APP_ID}.Locale"
+    flatpak repair --system >/dev/null 2>&1 || true
+    ok "Removed dangling flatpak refs and pruned repo"
+fi
+
 printf '\n'
 printf '%s\n' '------------------------------------------------------------'
 printf '%s\n' ' Uninstall complete'
 printf '%s\n' '------------------------------------------------------------'
 info ""
-info "The ROMs scaffold directories under ROMs/ were left in place so"
-info "Fightcade can still start. Your actual ROM files are untouched."
+if [ "${PURGE}" -eq 1 ]; then
+    info "Full purge done. Fightcade, its app data, launcher, logs, configs,"
+    info "and orphaned runtimes were removed. Your ROMs under /userdata/roms"
+    info "and /userdata/bios were not touched."
+else
+    info "The ROMs scaffold directories under ROMs/ were left in place so"
+    info "Fightcade can still start. Your actual ROM files are untouched."
+    info "Run with --purge to also remove the app data, launcher, and runtimes."
+fi
 info ""
