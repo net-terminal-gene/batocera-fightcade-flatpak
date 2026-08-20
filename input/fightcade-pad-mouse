@@ -643,6 +643,58 @@ def xdotool_windows_for_pid(display: str, pid: int) -> frozenset[str]:
         return frozenset()
 
 
+def xdotool_window_name(display: str, wid: str) -> str:
+    if not wid:
+        return ""
+    try:
+        out = subprocess.run(
+            ["xdotool", "getwindowname", wid],
+            env={**os.environ, "DISPLAY": display},
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def emu_dialog_present(display: str) -> bool:
+    """True when an FBNeo/Snes9x config dialog (Map Game Inputs, DIP, cheats) is open.
+
+    These dialogs share the emulator's PID but carry their own title and are far
+    smaller than the fullscreen game window. Detection is read-only: it never moves
+    focus or restacks anything. It lets the pad keep its pointer while the game
+    window still holds keyboard focus, so clicks land on the dialog under the cursor.
+    """
+    if fightcade_fbneo_running():
+        main_pat = "FBNeo"
+    elif fightcade_snes9x_running():
+        main_pat = "Snes9x"
+    else:
+        return False
+    main_wid = xdotool_first_window_by_name(display, main_pat)
+    if not main_wid:
+        return False
+    main_pid = xdotool_window_pid(display, main_wid)
+    if main_pid <= 0:
+        return False
+    main_name = xdotool_window_name(display, main_wid)
+    for wid in xdotool_windows_for_pid(display, main_pid):
+        if wid == main_wid:
+            continue
+        name = xdotool_window_name(display, wid)
+        if not name or name == main_name:
+            continue  # untitled render surface / duplicate of the game window
+        _, _, w, h = xdotool_window_geometry(display, wid)
+        if w >= 120 and h >= 60:
+            return True
+    return False
+
+
 def emu_window_at_pointer(display: str, menu_wid: str) -> str:
     """Smallest Wine emu window containing the pointer (OK button beats dialog beats main)."""
     x, y = pointer_xy(display)
@@ -807,6 +859,7 @@ class SessionState:
         self.crt_paused = False
         self.focus_name = ""
         self.in_lobby = True
+        self.emu_dialog_open = False
 
     def _apply_process_scan(self, procs: dict[str, bool]) -> None:
         self.fc_running = procs["fc"]
@@ -818,24 +871,32 @@ class SessionState:
         now = time.monotonic()
         self.crt_paused = crt_paused()
 
-        # Stale pause (e.g. quit emulator without SELECT+NORTH) forces menu-mode
-        # clicks in the lobby and breaks left click on Fightcade UI.
+        # Menu open (paused). Keep this path cheap. The only state worth checking is
+        # whether the emulator quit while paused (stale pause flag), and that process
+        # scan (pgrep over every Wine process) is expensive under CPU load, so
+        # throttle it to lobby_refresh_sec. Running it (twice) every loop iteration
+        # starved the cursor/click loop and added seconds of input latency, which is
+        # what defeated double-tap detection.
         if self.crt_paused:
-            procs_quick = scan_fightcade_processes()
-            if (
-                not procs_quick["snes9x"]
-                and not procs_quick["fbneo"]
-                and not os.path.isfile(FLYCAST_GAME_FLAG)
-            ):
-                clear_crt_pause()
-                self.crt_paused = False
+            self.in_lobby = False
+            if force or now - self.last_lobby_refresh >= self.lobby_refresh_sec:
+                self.last_lobby_refresh = now
+                procs = scan_fightcade_processes()
+                self._apply_process_scan(procs)
+                if (
+                    not procs["snes9x"]
+                    and not procs["fbneo"]
+                    and not os.path.isfile(FLYCAST_GAME_FLAG)
+                ):
+                    clear_crt_pause()
+                    self.crt_paused = False
+            if self.crt_paused:
+                # Still paused: skip wmctrl/xdotool focus polling; it fights the
+                # 60Hz cursor.
+                return
 
         if not force and now - self.last_lobby_refresh < self.lobby_refresh_sec:
             if self.in_lobby and not self.crt_paused:
-                return
-            if self.crt_paused:
-                self.in_lobby = False
-                self._apply_process_scan(scan_fightcade_processes())
                 return
 
         procs = scan_fightcade_processes()
@@ -885,6 +946,23 @@ class SessionState:
                     pass
         if not self.crt_paused:
             self.focus_name = read_focused_window_name(display)
+            # When the game window still holds focus, an emulator config dialog may
+            # be open behind it (cold-launch Map Game Inputs). Detect it so the pad
+            # pointer stays enabled; only check in that case to avoid extra xdotool
+            # calls during real gameplay.
+            prev_dialog = self.emu_dialog_open
+            if (self.fbneo_running or self.snes9x_running) and wine_menu_emu_in_focus(
+                self.focus_name
+            ):
+                self.emu_dialog_open = emu_dialog_present(display)
+            else:
+                self.emu_dialog_open = False
+            if self.emu_dialog_open != prev_dialog:
+                log(
+                    f"emu dialog {'open' if self.emu_dialog_open else 'closed'}: "
+                    f"pointer {'enabled' if self.emu_dialog_open else 'gated'} "
+                    f"while game window focused (focus=[{self.focus_name}])"
+                )
 
     def lobby_mouse_allowed(self) -> bool:
         # Flycast Dojo has its own in-game menu on SELECT and can quit from it, so no
@@ -894,7 +972,9 @@ class SessionState:
         if self.crt_paused:
             return True
         if wine_menu_emu_in_focus(self.focus_name):
-            return False
+            # Game window has focus. Allow the pointer only when a config dialog is
+            # actually open behind it, so the user can click it without Alt+Tab.
+            return self.emu_dialog_open
         return True
 
     def wine_menu_emu_combo_available(self) -> bool:
@@ -931,6 +1011,7 @@ class XdotoolClient:
                 "wdown) xdotool mousedown --window \"$a1\" \"$a2\" ;; "
                 "wup) xdotool mouseup --window \"$a1\" \"$a2\" ;; "
                 'click) xdotool click --clearmodifiers "$a1" ;; '
+                'dclick) xdotool click --clearmodifiers --repeat 2 --delay 30 "$a1" ;; '
                 'key) xdotool key --clearmodifiers "$a1" ;; '
                 "type) xdotool type --clearmodifiers --delay 12 -- \"$a1\" ;; "
                 "esac; done",
@@ -971,6 +1052,9 @@ class XdotoolClient:
 
     def click(self, button: int = 1) -> None:
         self._send(f"click {button}")
+
+    def double_click(self, button: int = 1) -> None:
+        self._send(f"dclick {button}")
 
     def mouse_down(self) -> None:
         self.mouse_button(1, True)
@@ -2061,23 +2145,47 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     select_modifier_was_down = False
     emu_menu_open = False
     all_fds = list(event_fds.keys())
-    cached_menu_wid = ""
-    last_menu_wid_scan = 0.0
-    menu_wid_scan_sec = 0.5
+    # Stuck-button watchdog: a held mouse button grabs the X pointer to the
+    # always-on-top Wine overlay, which then swallows every click meant for a
+    # dialog (Map Game Inputs). Auto-release a click that is held past this window
+    # without dragging, so a grab can never persist and block the dialog.
+    click_hold_max = 0.6
+    drag_slack = 10
+    left_press_at = 0.0
+    left_press_pos = (0, 0)
+    left_autoreleased = False
+    right_press_at = 0.0
+    right_press_pos = (0, 0)
+    right_autoreleased = False
+    # In-game emulator menus (menu_mode): emit an atomic click on the press edge
+    # instead of holding button1 until the physical release, which on some pads
+    # (e.g. DualSense) can arrive seconds late and defeats double-clicks. After a
+    # menu click, freeze cursor movement briefly so a rapid second tap lands on the
+    # same pixel and Wine registers a real double-click.
+    menu_click_freeze_sec = 0.35
+    menu_click_freeze_until = 0.0
+    # Two separate taps become two independent xdotool clicks spaced too far apart
+    # to register as a double-click. When a second tap lands on the same spot within
+    # this window, emit one real double-click (--repeat 2) so FBNeo assign works.
+    dbl_tap_window = 0.7
+    dbl_tap_slack = 18
+    last_menu_click_at = 0.0
+    last_menu_click_pos = (0, 0)
 
     try:
         while True:
             session.refresh(display)
             if not crt_paused():
                 emu_menu_open = False
-                cached_menu_wid = ""
             if os.path.isfile(DISABLE) or not session.fc_running:
                 if left_held:
                     set_mouse_button(False, xdotool, 1)
                     left_held = False
+                    left_autoreleased = False
                 if right_held:
                     set_mouse_button(False, xdotool, 3)
                     right_held = False
+                    right_autoreleased = False
                 if not cursor_visible:
                     set_cursor_visible(True, display)
                     cursor_visible = True
@@ -2122,52 +2230,117 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             chat_modifier_down = r1_down and not select_down
             now = time.time()
             menu_mode = menu_mode_active(session)
-            if menu_mode and now - last_menu_wid_scan >= menu_wid_scan_sec:
-                cached_menu_wid = menu_target_window_id(display, session.crt_paused)
-                last_menu_wid_scan = now
 
             if allow_click:
                 if left_down and not select_down and not chat_modifier_down and not left_held:
                     if menu_mode:
-                        click_wid, menu_wid = resolve_menu_click(
-                            display, session.crt_paused
+                        # Atomic XTEST click (press+release in one action) at the pointer.
+                        # No window resolve/raise here: those xdotool/wmctrl lookups block
+                        # the loop up to their 2s timeout on every click, and a real click
+                        # at the pointer already lands on the window under the cursor. Do
+                        # not hold: the physical release can arrive seconds late on some
+                        # pads, and a held button can never form a double-click. Freeze the
+                        # cursor so a rapid second tap lands on the same pixel; left_held
+                        # latches until the pad releases so a single tap fires one click.
+                        cur_pos = pointer_xy(display)
+                        is_dbl = (
+                            now - last_menu_click_at <= dbl_tap_window
+                            and abs(cur_pos[0] - last_menu_click_pos[0]) <= dbl_tap_slack
+                            and abs(cur_pos[1] - last_menu_click_pos[1]) <= dbl_tap_slack
                         )
-                        if menu_wid and click_wid and click_wid != menu_wid:
-                            raise_wine_dialog_for_click(display, menu_wid)
+                        if is_dbl:
+                            xdotool.double_click(1)
+                            last_menu_click_at = 0.0
+                        else:
+                            xdotool.click(1)
+                            last_menu_click_at = now
+                            last_menu_click_pos = cur_pos
+                        menu_click_freeze_until = now + menu_click_freeze_sec
+                        left_click_window = ""
+                        left_held = True
+                        left_press_at = now
+                        left_press_pos = cur_pos
+                        left_autoreleased = True
                     else:
+                        # Wine ignores synthetic XSendEvent (--window) clicks, so lobby
+                        # clicks use a real XTEST click at the pointer (window="").
                         click_wid = ""
-                    set_mouse_button(True, xdotool, 1, click_wid)
-                    left_click_window = click_wid
-                    left_held = True
+                        set_mouse_button(True, xdotool, 1, click_wid)
+                        left_click_window = click_wid
+                        left_held = True
+                        left_press_at = now
+                        left_press_pos = pointer_xy(display)
+                        left_autoreleased = False
                 elif (not left_down or select_down or chat_modifier_down) and left_held:
-                    set_mouse_button(False, xdotool, 1, left_click_window)
+                    if not left_autoreleased:
+                        set_mouse_button(False, xdotool, 1, left_click_window)
                     left_held = False
+                    left_autoreleased = False
                     left_click_window = ""
                 if right_down and not select_down and not chat_modifier_down and not right_held:
                     if menu_mode:
-                        click_wid, menu_wid = resolve_menu_click(
-                            display, session.crt_paused
-                        )
-                        if menu_wid and click_wid and click_wid != menu_wid:
-                            raise_wine_dialog_for_click(display, menu_wid)
+                        # Atomic click + freeze at the pointer (see left-button note); no
+                        # blocking window resolve/raise.
+                        xdotool.click(3)
+                        menu_click_freeze_until = now + menu_click_freeze_sec
+                        right_click_window = ""
+                        right_held = True
+                        right_press_at = now
+                        right_press_pos = pointer_xy(display)
+                        right_autoreleased = True
                     else:
+                        # Real XTEST click (see left-button note): Wine ignores --window.
                         click_wid = ""
-                    set_mouse_button(True, xdotool, 3, click_wid)
-                    right_click_window = click_wid
-                    right_held = True
+                        set_mouse_button(True, xdotool, 3, click_wid)
+                        right_click_window = click_wid
+                        right_held = True
+                        right_press_at = now
+                        right_press_pos = pointer_xy(display)
+                        right_autoreleased = False
                 elif (not right_down or select_down or chat_modifier_down) and right_held:
-                    set_mouse_button(False, xdotool, 3, right_click_window)
+                    if not right_autoreleased:
+                        set_mouse_button(False, xdotool, 3, right_click_window)
                     right_held = False
+                    right_autoreleased = False
                     right_click_window = ""
             else:
                 if left_held:
-                    set_mouse_button(False, xdotool, 1, left_click_window)
+                    if not left_autoreleased:
+                        set_mouse_button(False, xdotool, 1, left_click_window)
                     left_held = False
+                    left_autoreleased = False
                     left_click_window = ""
                 if right_held:
-                    set_mouse_button(False, xdotool, 3, right_click_window)
+                    if not right_autoreleased:
+                        set_mouse_button(False, xdotool, 3, right_click_window)
                     right_held = False
+                    right_autoreleased = False
                     right_click_window = ""
+
+            # Stuck-button watchdog: if a click is still held past click_hold_max and
+            # the pointer has not moved (i.e. it is not a real drag), force the button
+            # up so it cannot hold an X pointer grab on the overlay and block dialog
+            # clicks. left_held stays set so no new press fires until the pad releases.
+            if left_held and not left_autoreleased and now - left_press_at >= click_hold_max:
+                cx, cy = pointer_xy(display)
+                px, py = left_press_pos
+                if abs(cx - px) <= drag_slack and abs(cy - py) <= drag_slack:
+                    set_mouse_button(False, xdotool, 1, left_click_window)
+                    left_autoreleased = True
+                    log(
+                        f"click watchdog: auto-released held left button "
+                        f"({now - left_press_at:.2f}s) at ({cx},{cy}) to clear overlay grab"
+                    )
+            if right_held and not right_autoreleased and now - right_press_at >= click_hold_max:
+                cx, cy = pointer_xy(display)
+                px, py = right_press_pos
+                if abs(cx - px) <= drag_slack and abs(cy - py) <= drag_slack:
+                    set_mouse_button(False, xdotool, 3, right_click_window)
+                    right_autoreleased = True
+                    log(
+                        f"click watchdog: auto-released held right button "
+                        f"({now - right_press_at:.2f}s) at ({cx},{cy}) to clear overlay grab"
+                    )
 
             if session.in_lobby and now - last_pointer_rescan >= pointer_rescan_sec:
                 disable_fake_touchpad_pointers(display)
@@ -2358,6 +2531,11 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     dx += hx * step
                 if hy:
                     dy += hy * step
+                # Hold the cursor still briefly after a menu click so a rapid second
+                # tap double-clicks the same pixel instead of drifting off-target.
+                if now < menu_click_freeze_until:
+                    dx = 0
+                    dy = 0
                 move_mouse(dx, dy, xdotool)
     finally:
         if left_held:
