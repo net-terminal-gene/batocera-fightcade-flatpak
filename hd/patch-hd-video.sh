@@ -73,7 +73,7 @@ patch_fbneo_hd_ini() {
     sed -i "s/^nVidVerHeight .*/nVidVerHeight ${HD_HEIGHT}/" "$ini"
     sed -i 's/^bVidFullStretch .*/bVidFullStretch 0/' "$ini"
     sed -i 's/^bVidCorrectAspect .*/bVidCorrectAspect 1/' "$ini"
-    sed -i 's/^bVidAutoSwitchFull .*/bVidAutoSwitchFull 1/' "$ini"
+    sed -i 's/^bVidAutoSwitchFull .*/bVidAutoSwitchFull 0/' "$ini"
     sed -i 's/^bVidDX9WinFullscreen .*/bVidDX9WinFullscreen 0/' "$ini"
     sed -i 's/^bVidArcaderesHor .*/bVidArcaderesHor 0/' "$ini"
     sed -i 's/^bVidArcaderesVer .*/bVidArcaderesVer 0/' "$ini"
@@ -82,7 +82,7 @@ patch_fbneo_hd_ini() {
     sed -i 's/^bVidTripleBuffer .*/bVidTripleBuffer 1/' "$ini"
     sed -i 's/^nWindowPosX .*/nWindowPosX 0/' "$ini"
     sed -i 's/^nWindowPosY .*/nWindowPosY 0/' "$ini"
-    log "fbneo ini: ${HD_WIDTH}x${HD_HEIGHT}, correct aspect, auto-fullscreen, vsync"
+    log "fbneo ini: ${HD_WIDTH}x${HD_HEIGHT}, correct aspect, windowed menu, vsync"
 }
 
 patch_ggpofba_hd_ini() {
