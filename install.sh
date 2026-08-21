@@ -2,6 +2,10 @@
 set -eu
 
 REPO="net-terminal-gene/batocera-fightcade-flatpak"
+# Install from a GitHub branch before it merges to main (kept for maintainer use;
+# not documented for end users). Keep the curl URL on main/install.sh; --branch (or
+# FIGHTCADE_FLATPAK_BRANCH) selects which ref all files come from:
+#   curl -fsSL https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh | bash -s -- -y --branch BRANCH
 BRANCH="${FIGHTCADE_FLATPAK_BRANCH:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 APP_ID="com.fightcade.Fightcade"

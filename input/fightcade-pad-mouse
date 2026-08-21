@@ -1381,37 +1381,6 @@ def r2_active(
     return False
 
 
-def r1_slow_nudge(
-    bind: PadBindings,
-    keys: dict[int, int],
-    axes: dict[int, int],
-    caps: dict[int, tuple[int, int, int]],
-) -> bool:
-    """HD: slow cursor when R1 is held alone (lobby chat uses R1+face)."""
-    if not r1_active(bind, keys):
-        return False
-    # btn_left excluded: R1+SOUTH is lobby chat, not slow drag-scroll.
-    for code in (
-        bind.btn_left,
-        bind.btn_right,
-        bind.btn_combo_west,
-        bind.btn_combo_north,
-        bind.btn_select,
-        bind.btn_start,
-    ):
-        if code >= 0 and key_down(keys, code):
-            return False
-    if bind.btn_hotkey >= 0 and bind.btn_hotkey != bind.btn_select:
-        if key_down(keys, bind.btn_hotkey):
-            return False
-    for code, is_axis in bind._r2_sources_list():
-        if is_axis and axis_triggered(axes, caps, code):
-            return False
-        if not is_axis and key_down(keys, code):
-            return False
-    return True
-
-
 def r2_slow_nudge(
     bind: PadBindings,
     keys: dict[int, int],
@@ -2507,10 +2476,6 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 )
                 fine_nudge = r2_slow_nudge(bind, key_state, axes, caps) and not chat_modifier_down
                 hd_mode = not crt_cursor_profile(display)
-                if hd_mode:
-                    fine_nudge = r1_slow_nudge(
-                        bind, key_state, axes, caps
-                    ) or fine_nudge
                 use_menu_speeds = menu_mode and not session.in_lobby
                 use_lobby_speeds = session.in_lobby and not use_menu_speeds
                 use_drag_speeds = use_lobby_speeds and left_held

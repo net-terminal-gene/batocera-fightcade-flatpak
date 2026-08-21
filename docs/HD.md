@@ -55,4 +55,18 @@ Or re-run the full installer; it is safe on an existing install.
 > native resolution, then restores the HD baseline when the game exits. CRT gameplay
 > is not changed by these presets.
 
+> [!TIP]
+> **Gamepad in the emulator menu (HD):**
+> - **No pad cursor after opening the menu?** Press **SELECT + WEST** again to bring it back.
+> - **Clicks not landing?** Press **SELECT + R1** a few times to focus the window you are on.
+> - **Back to fullscreen game:** press **SELECT + NORTH**.
+>
+> Full layout: [Controls & navigation](CONTROLS.md#emulator-menus-fbneo--snes).
+
+> [!WARNING]
+> **If you open the in-game menu and change anything, quit the game and launch it again.**
+> Once the emulator menu has been opened mid-game, some button combos (**WEST** / **NORTH**
+> together with another button) can be misread afterward. Quit to the lobby
+> (**SELECT + Start**) and relaunch the game so it starts in a clean state.
+
 [← Back to main README](../README.md)

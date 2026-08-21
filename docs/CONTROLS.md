@@ -1,11 +1,14 @@
 # Controls & navigation
 
-> Fightcade is designed to be used with a **keyboard and mouse**, especially for
-> **chat**. This installer adds **gamepad navigation** so you can move the cursor
-> and open menus without a mouse. The playable library is **4:3** and was built
-> for **CRTs at native resolutions**; on CRT setups, [Switchres](CRT.md) switches
-> per-game modelines while the lobby stays at menu timing. For preset lobby chat
-> lines from the gamepad, see [Fightcade lobby chat config](LOBBY-CHAT.md).
+> Fightcade was designed around a **keyboard and mouse**, but this installer lets you
+> run the whole thing from a **game controller**. Gamepad navigation moves the cursor
+> and opens menus without a mouse, and you get **custom preset chat lines** you can fire
+> off with a **button combo** (see [Fightcade lobby chat config](LOBBY-CHAT.md)), so you
+> can still greet people, say GG, and get by in the lobby without a keyboard. It is not
+> as flexible as typing, but it covers the essentials.
+>
+> **One caveat with the controller:** you cannot chat during gameplay. Preset chat works
+> in the **lobby**, not mid-match.
 
 ## Contents
 
@@ -44,9 +47,9 @@ Out of the box, on a standard diamond face layout:
 | **NORTH** + **SELECT** | Top face button | Resume game |
 | **D-pad** | D-pad | Move cursor |
 | **Left analog** | Left stick | Move cursor |
-| **R1** (held alone, HD) / **R2** (held alone, CRT) | Shoulder / trigger | Slow cursor |
+| **R2** (held alone) | Trigger | Slow cursor (HD and CRT) |
 | **R1** + **SOUTH** / **EAST** / **WEST** / **NORTH** / **R2** | Face buttons / R2 | Send lobby chat line ([lobby chat config](LOBBY-CHAT.md)) |
-| **Right shoulder** + **SELECT** | Right bumper | Alt+Tab (cycle windows) |
+| **R1** + **SELECT** | Right shoulder button | Alt+Tab (cycle windows) |
 | **START** + **SELECT** | Start button | Alt+F4 (quit emulator, return to lobby) |
 
 That is the default for most pads Batocera already knows. EmulationStation menus and
@@ -66,52 +69,42 @@ Map each controller the same way (same slots, same roles). Fightcade follows wha
 you set in **ES Controller Mapping** for that pad. The **slot → action** table above
 does not change; only which physical button you assign to each slot changes.
 
-**Lobby** = Fightcade UI (home, search, rooms, chat, settings). **FBNeo / SNES menu**
-= emulator menu bar visible. Flycast Dojo has its own in-game menu on **SELECT** and
-quits from it, so Flycast uses no pad cursor and no pause combos.
+### Cursor speed
 
-**Cursor speed:** move the stick or D-pad normally for fast cursor movement. Hold **R1**
-alone (HD) or **R2** alone (CRT) while moving the stick or D-pad for slow, precise movement.
+The stick or D-pad moves the pointer, and the speed is tuned for you automatically. HD
+and CRT get their own speeds (a CRT screen is much smaller, so the pointer moves slower
+there), and it switches based on your display, no setup needed.
 
-HD (1080p) and CRT (Switchres / sub-1024p desktop) use separate tables in
-`/userdata/system/configs/fightcade-pad-mouse.conf`. CRT is detected from desktop
-resolution (under 1024px wide), not only during an active game.
+When you need fine, pixel-level aiming, hold **R2** while you move. It works the same in
+both HD and CRT.
 
-| Key | Default | When |
-|-----|---------|------|
-| `max_speed_hd` | 20 | HD full stick (in-game) |
-| `slow_speed_hd` | 3 | R1 slow mode (HD) |
-| `max_speed_hd_menu` | 30 | HD emulator menus |
-| `slow_speed_hd_menu` | 5 | R1 slow (HD menus) |
-| `max_speed_crt` | 6 | CRT full stick (in-game) |
-| `slow_speed_crt` | 2 | R2 slow mode (CRT) |
-| `max_speed_crt_lobby` | 8 | CRT Fightcade lobby |
-| `slow_speed_crt_lobby` | 2 | R2 slow (CRT lobby) |
-| `max_speed_hd_lobby_drag` | 14 | HD lobby drag-scroll (SOUTH held + stick) |
-| `slow_speed_hd_lobby_drag` | 2 | R2 slow (HD lobby drag-scroll) |
-| `max_speed_crt_lobby_drag` | 5 | CRT lobby drag-scroll (SOUTH held + stick) |
-| `slow_speed_crt_lobby_drag` | 1 | R2 slow (CRT lobby drag-scroll) |
-| `max_speed_crt_menu` | 14 | CRT emulator menus |
-| `slow_speed_crt_menu` | 4 | R2 slow (CRT menus) |
-
-Legacy `max_speed` / `slow_speed` in that file apply to HD only. Quit and relaunch Fightcade from EmulationStation after editing.
-
-**Clicks:** **SOUTH** = left click, **EAST** = right click (challenge flow, context menus).
+Most people never touch this. If you want to change the speeds, they live in
+`/userdata/system/configs/fightcade-pad-mouse.conf`, with separate HD and CRT values
+(and separate `max_*` / `slow_*` keys for in-game, lobby, and menus). The file's header
+comments explain the naming. Quit and relaunch Fightcade after editing.
 
 ### Emulator menus (FBNeo / SNES)
 
 **SELECT + WEST** opens the emulator menu (sends **ESC**). On **CRT** with Switchres
 active, the display returns to lobby / menu timing while the menu is open and the
 pad cursor is shown. **SELECT + NORTH** resumes the game (CRT: restores the game's
-native modeline and dismisses the menu).
+native modeline and dismisses the menu). All of these combos are in the stock-layout
+table above and the [context table](#context-table) below.
 
-| Action | Combo |
-|--------|--------|
-| Move cursor | Stick / D-pad (hold **R1** alone for slow movement in HD) |
-| Left / right click | **SOUTH** / **EAST** |
-| Resume game | **SELECT + NORTH** |
-| Cycle windows | **SELECT + right shoulder** (Alt+Tab) |
-| Quit to Fightcade lobby | **SELECT + Start** (Alt+F4) |
+> [!TIP]
+> **Cursor, focus, and fullscreen (HD and CRT):**
+> - **No pad cursor after opening the menu?** Press **SELECT + WEST** again to bring it back.
+> - **Clicks not landing on a window/dialog?** Press **SELECT + R1** a few times to focus
+>   the window you are pointing at (Alt+Tab cycles windows).
+> - **Back to fullscreen game:** press **SELECT + NORTH**. This is the fullscreen/resume
+>   combo in both HD and CRT.
+
+> [!WARNING]
+> **If you open the in-game menu and change anything, quit the game and launch it again.**
+> Once the emulator menu has been opened mid-game, some button combos (**WEST** / **NORTH**
+> together with another button) can be misread afterward and, on **CRT**, may toggle
+> Switchres on or off. Quit to the lobby (**SELECT + Start**) and relaunch the game so it
+> starts in a clean state.
 
 **Menu bar** items (File, Input, Game, and so on) receive clicks on the main emulator
 window.
@@ -121,12 +114,6 @@ on top of the menu. The installer detects the dialog under the pointer, raises o
 that surface, and sends the click to the control under the cursor (**OK**, **Cancel**,
 or a list row). You should not need a keyboard or Alt+Tab to close **Map game inputs**
 with **SOUTH** on **OK**.
-
-**Window focus:** **SELECT + right shoulder** sends Alt+Tab to cycle EmulationStation, Fightcade,
-and any open emulator window.
-
-**Quit game:** **SELECT + Start** sends Alt+F4 to close the emulator and return to the
-Fightcade lobby (while a game is running).
 
 To challenge someone in a room: **EAST** (right click) on their name, then **SOUTH** (left click)
 **Challenge**.
@@ -147,35 +134,22 @@ Default mapping (Batocera ES slot names):
 | **Y** | **WEST** | Save state |
 | **R1** (pagedown) | Right shoulder | Auto-translate (libretro cores) |
 
-This installer uses **SELECT** for pause, resume, Alt+Tab, and quit. When you press
-**SELECT + WEST** or **SELECT + NORTH**, Batocera may receive the same chord as
-**Hotkey + save/load** at the OS level.
+This installer uses **SELECT** for pause, resume, Alt+Tab, and quit, so it can overlap
+with those global combos. In practice the only one you tend to notice is **Hotkey +
+EAST** opening the **Control Center** during Fightcade. Save/load (**Hotkey + WEST /
+NORTH**) share buttons with pause/resume, but Fightcade runs as a **Flatpak** port whose
+hotkey context only wires **exit**, so those combos will not write Batocera save states.
+Lobby chat deliberately uses **R1 + slot** (not SELECT) so it never opens Control Center.
 
-**What we found in practice**
-
-- **Hotkey + EAST** (Control Center) can open during Fightcade. That is the overlap
-  users notice most often.
-- **Hotkey + WEST/NORTH** (save/load) share the same physical buttons as pause/resume,
-  but Fightcade runs as a **Flatpak** port. Batocera's Flatpak hotkey context only wires
-  **exit**, not save/load, so those combos are unlikely to create Batocera save-state
-  files during Fightcade play.
-- Lobby chat uses **R1 + slot** (not SELECT) so chat lines do not open Control Center.
-  See [Fightcade lobby chat config](LOBBY-CHAT.md).
-
-**Do not globally disable Batocera hotkeys** (for example
-`batocera-joysticks-hotkeys --a none`) unless you want that everywhere on the box.
-That affects every emulator, not just Fightcade.
-
-Optional: if Control Center still gets in the way, check whether your Batocera build
-exposes **exit hotkey only** (or similar) for the Fightcade port. That limits
-in-game overlays for Fightcade only without changing other systems.
-
-View or change global bindings: `batocera-joysticks-hotkeys` (see
+If Control Center gets in the way, check whether your Batocera build offers **exit hotkey
+only** for the Fightcade port (limits overlays for Fightcade alone). **Do not** globally
+disable hotkeys (for example `batocera-joysticks-hotkeys --a none`) unless you want that
+on every emulator. View or change bindings with `batocera-joysticks-hotkeys` (see the
 [Batocera wiki](https://wiki.batocera.org/)).
 
 ## Context table
 
-| Where you are | Left Analog/D-pad | + slow (R1 HD / R2 CRT) | SOUTH | EAST | SELECT + WEST | SELECT + NORTH | SELECT + R shoulder | SELECT + Start |
+| Where you are | Left Analog/D-pad | + slow (R2) | SOUTH | EAST | SELECT + WEST | SELECT + NORTH | SELECT + R1 | SELECT + Start |
 |---------------|-------------------|-------------------------|-------|------|---------------|----------------|---------------------|----------------|
 | **Lobby** | Move cursor (fast) | Move cursor (slow) | Left click | Right click | — | — | Alt+Tab (cycle windows) | — |
 | **FBNeo playing** | — | — | — | — | Open FBNeo menu (ESC) | — | — | Quit emulator (lobby) |

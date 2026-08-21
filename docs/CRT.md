@@ -5,6 +5,16 @@
 > to be installed and configured on your Batocera system. Without it, lobby
 > timing and per-game native resolution switching will not work.
 
+> [!IMPORTANT]
+> **Fightcade's Video Mode must resolve to 640×480 on CRT.** In EmulationStation:
+> **Ports → Fightcade → Advanced Game Settings → Video Mode**. Either:
+> - Set **Video Mode = 640×480** directly, **or**
+> - If you already set a global mode under **System Settings → Video Mode**, leave
+>   **Advanced Game Settings → Video Mode = Auto** so it inherits that global mode.
+>
+> The lobby UI is laid out for 640×480. Other resolutions look wrong (cropped, oversized,
+> or misaligned), and exiting an emulator back to the lobby is unreliable otherwise.
+
 Fightcade's playable library is **4:3** and was authored for **CRTs at native
 resolutions** (arcade modelines, 256×224 SNES, and the rest). Switchres on
 Batocera restores that model: **menu timing for the lobby**, **per-game modelines
@@ -29,10 +39,7 @@ resolution and refresh rate, then restores menu timing when the session ends.
 - [Controls (CRT)](#controls-crt)
 - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
-- [Beta test checklist](beta-test-checklist.md) (session paths, gamepad controls, Switchres on/off)
 - [Recovery](#recovery)
-- [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
-
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
 
 ## Fightcade resolution
@@ -40,14 +47,9 @@ resolution and refresh rate, then restores menu timing when the session ends.
 CRT play needs **xorg** display mode in addition to Batocera-CRT-Script (see caution
 above).
 
-> [!IMPORTANT]
-> **Set Fightcade to 640×480 in CRT mode.** In EmulationStation: **Ports → Fightcade →
-> Advanced Game Settings → Video Mode** → choose **640×480**. The lobby UI is laid out for
-> that size. Other resolutions look wrong (cropped, oversized, or misaligned), and exiting
-> an emulator back to the lobby is unreliable when Fightcade is not at 640×480.
-
-Walk through [beta-test-checklist.md](beta-test-checklist.md#crt-mode-xorg--switchres)
-after you set the resolution.
+Fightcade's Video Mode must resolve to **640×480** on CRT (set it directly, or leave
+**Advanced Game Settings → Video Mode = Auto** if your global **System Settings → Video
+Mode** is already 640×480). See the note at the [top of this page](#crt--switchres-support).
 
 ## Controls (CRT)
 
@@ -60,6 +62,17 @@ as documented in the [context table](CONTROLS.md#context-table).
 **FBNeo / SNES menu cursor:** Stick, D-pad, **SOUTH** / **EAST**, and modal dialogs
 (for example **Input → Map game inputs**) are covered in
 [Controls — Emulator menus](CONTROLS.md#emulator-menus-fbneo--snes).
+
+> [!TIP]
+> - **No pad cursor after opening the menu?** Press **SELECT + WEST** again to bring it back.
+> - **Clicks not landing?** Press **SELECT + R1** a few times to focus the window you are on.
+> - **Back to fullscreen game:** press **SELECT + NORTH**.
+
+> [!WARNING]
+> **If you open the in-game menu and change anything, quit the game and launch it again.**
+> Once the emulator menu has been opened mid-game, some button combos (**WEST** / **NORTH**
+> together with another button) can be misread afterward and may toggle Switchres on or off.
+> Quit to the lobby (**SELECT + Start**) and relaunch the game so it starts in a clean state.
 
 ## Keyboard (FBNeo / SNES)
 
@@ -82,7 +95,7 @@ touch /userdata/system/configs/fightcade-switchres.force     # force Switchres o
 ```
 
 Remove the file to undo. `/userdata/system/fightcade-flatpak/fightcade-diagnose` reports whether either flag is
-present. Walk through the [Switchres on/off steps](beta-test-checklist.md#switchres-onoff-crt) in the beta checklist (Step 2 and Step 3 are optional).
+present.
 
 ## Recovery
 

@@ -6,9 +6,9 @@
 
 <h1 align="center">Fightcade Flatpak for Batocera</h1>
 
-Fightcade on Batocera, built for a **single controller**: navigate the lobby, send chat
-lines, and open emulator menus without a keyboard and mouse. **One install command**
-links your ROM library and layers Batocera-specific features on top of stock Fightcade.
+Fightcade on Batocera. **One install command** links your ROM library and layers
+Batocera-specific features on top of stock Fightcade. Built for a **single controller** in mind:
+navigate the lobby, send chat lines, and open emulator menus without a keyboard and mouse.
 
 > **Added Bonus - Play it the way it was drawn.**
 >
@@ -17,40 +17,30 @@ links your ROM library and layers Batocera-specific features on top of stock Fig
 > analog hardware they were originally intended for: a **CRT** (Cathode Ray Tube) monitor.
 >
 > With the help of [**Batocera-CRT-Script**](https://github.com/ZFEbHVUE/Batocera-CRT-Script),
-> Batocera switches the display to **that game's native resolution** the moment you start
-> a match using its built-in **Switchres** capabilities. That means **pixel-perfect
+> Batocera switches the display to **a game's native resolution** the moment you start
+> a match, replay, live spectate, test or even training using its built-in **Switchres** capabilities. That means **pixel-perfect
 > modelines** that no downscaler would ever achieve. Not every game shares the exact same
-> resolution, but there is no need to worry. Batocera changes automatically with zero custom
-> setup. The same pixels, speed, and picture the developers signed off on, with no guessing
-> or "close enough."
+> resolution, no need to worry. Batocera changes it automatically with zero custom
+> setup. The same pixels, speed, and picture the developers signed off on, with no guessing.
 
 HD presets, CRT setup, and full guides are in [Added features](#added-features).
-
-## Beta testing
-
-This installer is in **beta**. Before you report issues, walk through
-[docs/beta-test-checklist.md](docs/beta-test-checklist.md) for **HD mode** (LCD / HDMI)
-and **CRT mode** (xorg + Switchres + Batocera-CRT-Script). **CRT testers:** set Fightcade
-to **640×480** first ([docs/CRT.md](docs/CRT.md#fightcade-resolution)). Each mode covers **TEST GAME**,
-**TRAINING**, **ONLINE MATCH**, **REPLAY**, and **LIVE SPECTATING**. Include output from
-`/userdata/system/fightcade-flatpak/fightcade-diagnose` in your report. Post feedback in the [Discord beta thread](https://discord.com/channels/357518249883205632/1536626216105148436).
 
 ## Contents
 
 - [Install](#install)
 - [ROM format and BIOS](#rom-format--bios-requirements)
 - [ROM path mapping](#rom-path-mapping)
-- [Commands](#commands)
-- [Re-running the installer](#re-running-the-installer)
+- [Maintenance](#maintenance)
+- [Troubleshooting](#troubleshooting)
 - [Added features](#added-features)
 
 ## Install
 
-[SSH into your Batocera device](https://wiki.batocera.org/access_the_batocera_via_ssh), or open **xterm** from the file manager (F1 → Applications) on xorg builds, then run:
-
 > [!NOTE]
 > Your Batocera device must be **connected to the internet**. The installer downloads
 > scripts from GitHub and may install Fightcade from Flathub.
+
+[SSH into your Batocera device](https://wiki.batocera.org/access_the_batocera_via_ssh), or open **xterm** from the file manager (F1 → Applications) on xorg builds, then run:
 
 ```bash
 curl -fsSL \
@@ -63,10 +53,8 @@ The installer:
 1. Verifies Batocera and Flatpak are available.
 2. Installs `com.fightcade.Fightcade` from Flathub if missing.
 3. Creates the Fightcade ROMs scaffold and links your `/userdata/roms` folders into it.
-4. Drops a `_fightcade.txt` note (same style as Batocera's `_info.txt`) into each linked
-   `/userdata/roms/<system>` folder describing Fightcade's ROM format and BIOS requirements.
-5. Installs Ports artwork under `/userdata/roms/flatpak/images/` and wires `gamelist.xml`.
-6. Installs [added features](#added-features) (gamepad navigation, chat, HD/CRT display).
+4. Installs Ports artwork under `/userdata/roms/flatpak/images/` and wires `gamelist.xml`.
+5. Installs [added features](#added-features) (gamepad navigation, chat, HD/CRT display).
 
 ## ROM format & BIOS requirements
 
@@ -85,6 +73,9 @@ and validation details.
 - **flycast (Flycast-Dojo):** Flycast-Dojo build by blueminder. **Dreamcast games** must
   be Fightcade CHD format with hashes matching the Fightcade ROM database; standard
   Batocera CHD rips will fail Fightcade's hash check.
+- **Naomi / Atomiswave (flycast):** Fightcade `.zip` BIOS + game sets via the flycast
+  links. No separate BIOS path; those BIOS ZIPs live alongside the game ZIPs in the ROM
+  folder.
 - **Dreamcast BIOS:** Fightcade's Flycast emulator reads the BIOS from its own config path,
   not from the `ROMs/flycast/` tree. If you already have Dreamcast set up in Batocera, the
   BIOS files are normally already at `/userdata/bios/dc/` (`dc_boot.bin` and
@@ -103,15 +94,11 @@ and validation details.
     /userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data/
   ```
 
-- **Naomi / Atomiswave (flycast):** Fightcade `.zip` BIOS + game sets via the flycast
-  links. No separate BIOS path; those BIOS ZIPs live alongside the game ZIPs in the ROM
-  folder.
 - **ggpofba (legacy FightcadeFBA):** Optional. Still present in Fightcade V2 for **legacy
   FC1** channels only (look for **FC1** in the channel list). Normal V2 arcade play uses
   **fbneo** instead. You can ignore this emulator unless you join FC1 rooms. ROM
   requirements follow Fightcade's legacy FBA rules (see the help link above). This
-  installer creates an empty `ROMs/ggpofba` folder but does not link Batocera ROMs into
-  it.
+  installer creates an empty `ROMs/ggpofba` folder but does not link Batocera ROMs into it.
 
 ## ROM path mapping
 
@@ -149,23 +136,30 @@ When a source directory does not exist, an empty real directory is created inste
 > secondary drive merged into `/userdata/roms` via Storage Manager, the symlinks still
 > work: Fightcade reads through the unified path, not a copy on internal storage.
 
-## Commands
+## Maintenance
 
-| Command | What it does |
-|---------|--------------|
-| `/userdata/system/fightcade-flatpak/fightcade-roms-sync` | Re-scan your `/userdata/roms` folders and refresh Fightcade symlinks |
-| `/userdata/system/fightcade-flatpak/hd/patch-hd-video.sh` | Apply HD fullscreen, aspect, and vsync defaults (see [HD.md](docs/HD.md)) |
-| `/userdata/system/fightcade-flatpak/input/fightcade-pad-mouse status` | Show whether the pad-mouse daemon is running |
-| `/userdata/system/configs/fightcade-pad-mouse.conf` | Cursor speed (HD vs CRT, lobby, menus, R1/R2 slow) |
-| `/userdata/system/configs/fightcade-lobby-chat.conf` | Lobby chat macros (R1 + face / R2) |
-| `/userdata/system/fightcade-flatpak/fightcade-diagnose` | Print install state, link health, and artwork / patch status |
-| `/userdata/system/fightcade-flatpak/uninstall.sh` | Remove links, hook, overrides, xdg-open patch, and scripts (ROMs and Flatpak untouched) |
-| `/userdata/system/fightcade-flatpak/uninstall.sh --uninstall-flatpak` | Also uninstall the Fightcade Flatpak |
+Re-running the installer is safe: it creates missing links, refreshes changed ones,
+reapplies HD video defaults, and does not modify real user files.
 
-## Re-running the installer
+- **Uninstall:** `/userdata/system/fightcade-flatpak/uninstall.sh` removes links, hook,
+  overrides, the xdg-open patch, and scripts (ROMs and Flatpak untouched). Add
+  `--uninstall-flatpak` to also remove the Fightcade Flatpak.
 
-Re-running the installer over an existing install is safe. It creates missing links,
-refreshes changed ones, reapplies HD video defaults, and does not modify real user files.
+## Troubleshooting
+
+Most issues while navigating with a gamepad have a quick fix:
+
+| Problem | Fix |
+|---------|-----|
+| **No pad cursor after opening the in-game menu** | Press **SELECT + WEST** again to bring the cursor back. |
+| **Clicks not landing on a window or dialog** | Press **SELECT + R1** a few times to focus the window you are pointing at (Alt+Tab). |
+| **Can't get back to the full-screen game** | Press **SELECT + NORTH** (resume / fullscreen, HD and CRT). |
+| **Weird behavior after changing settings in the in-game menu** | Quit to the lobby (**SELECT + Start**) and relaunch the game so it starts clean. On CRT this also avoids stray Switchres toggles. |
+| **Control Center keeps opening mid-game** | That's Batocera's **Hotkey + EAST** global combo. See [docs/CONTROLS.md — Batocera hotkeys](docs/CONTROLS.md#batocera-hotkeys-select). |
+| **Lobby looks cropped / oversized on CRT** | Fightcade's Video Mode must resolve to **640×480**. See [docs/CRT.md](docs/CRT.md#crt--switchres-support). |
+| **Something looks broken after install** | Run `/userdata/system/fightcade-flatpak/fightcade-diagnose` and re-run the installer (it's safe). |
+
+Full gamepad layout and per-mode details: [docs/CONTROLS.md](docs/CONTROLS.md).
 
 ## Added features
 
@@ -175,6 +169,5 @@ refreshes changed ones, reapplies HD video defaults, and does not modify real us
 | Lobby chat config (`fightcade-lobby-chat.conf`) | [docs/LOBBY-CHAT.md](docs/LOBBY-CHAT.md) |
 | HD fullscreen / aspect / vsync | [docs/HD.md](docs/HD.md) |
 | CRT / Switchres / native modelines | [docs/CRT.md](docs/CRT.md) |
-| Beta test checklist | [docs/beta-test-checklist.md](docs/beta-test-checklist.md) |
 
 License: [CC0 1.0](LICENSE)
