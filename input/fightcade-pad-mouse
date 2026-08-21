@@ -113,11 +113,11 @@ DEFAULTS = {
 
 CHAT_SLOTS = ("south", "east", "west", "north", "r2")
 DEFAULT_CHAT_MACROS: dict[str, str] = {
-    "south": "ggs!",
-    "east": "wp",
-    "west": "rematch?",
-    "north": "gg",
-    "r2": "nice",
+    "south": "match",
+    "east": "you quit?",
+    "west": "great set!",
+    "north": "rematch?",
+    "r2": "ggs!",
 }
 
 

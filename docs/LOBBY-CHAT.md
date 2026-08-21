@@ -89,11 +89,11 @@ physical button fills each slot, the config still uses slot names (`south`, not
 
 | Config key | ES slot | Default button (stock layout) | Default message |
 |------------|---------|-------------------------------|-----------------|
-| `south` | SOUTH | Bottom face | `ggs!` |
-| `east` | EAST | Right face | `wp` |
-| `west` | WEST | Left face | `rematch?` |
-| `north` | NORTH | Top face | `gg` |
-| `r2` | R2 | Right trigger (as button) | `nice` |
+| `south` | SOUTH | Bottom face | `match` |
+| `east` | EAST | Right face | `you quit?` |
+| `west` | WEST | Left face | `great set!` |
+| `north` | NORTH | Top face | `rematch?` |
+| `r2` | R2 | Right trigger (as button) | `ggs!` |
 
 ## Defaults
 
@@ -101,11 +101,11 @@ Out of the box, the installer copies these lines into your config:
 
 | Slot | Message |
 |------|---------|
-| **south** | `ggs!` |
-| **east** | `wp` |
-| **west** | `rematch?` |
-| **north** | `gg` |
-| **r2** | `nice` |
+| **south** | `match` |
+| **east** | `you quit?` |
+| **west** | `great set!` |
+| **north** | `rematch?` |
+| **r2** | `ggs!` |
 
 Change them to whatever your room or game community uses.
 
