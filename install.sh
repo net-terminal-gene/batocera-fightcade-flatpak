@@ -11,7 +11,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -288,6 +288,7 @@ link_cli_tools() {
   mkdir -p /usr/bin
   ln -sf "${pd}/input/fightcade-pad-mouse" /usr/bin/fightcade-pad-mouse
   ln -sf "${pd}/input/fightcade-cursor" /usr/bin/fightcade-cursor
+  ln -sf "${pd}/fightcade-lobby-zoom" /usr/bin/fightcade-lobby-zoom
   ln -sf "${pd}/fightcade-diagnose" /usr/bin/fightcade-diagnose
 }
 

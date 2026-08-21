@@ -497,6 +497,26 @@ check_hd_ini_key "Flycast vsync" \
     "${FLATPAK_DATA}/config/flycast/emu.cfg" '^rend\.vsync = yes'
 
 # ---------------------------------------------------------------------------
+head_section "Lobby zoom (HD vs CRT)"
+# ---------------------------------------------------------------------------
+
+ZOOM_TOOL="${PROJECT_DIR}/fightcade-lobby-zoom"
+ZOOM_CONF="/userdata/system/configs/fightcade-lobby-zoom.conf"
+
+if [ -x "$ZOOM_TOOL" ]; then
+    pass "lobby-zoom tool installed: fightcade-lobby-zoom"
+    if [ -f "$ZOOM_CONF" ]; then
+        info "saved zoom levels (${ZOOM_CONF}):"
+        info "  HD  = $(sed -n 's/^zoom_hd=//p' "$ZOOM_CONF" | tail -1)"
+        info "  CRT = $(sed -n 's/^zoom_crt=//p' "$ZOOM_CONF" | tail -1)"
+    else
+        info "no saved zoom yet (captured when you exit Fightcade in each mode)"
+    fi
+else
+    info "lobby-zoom tool not installed (re-run installer to add per-mode zoom)"
+fi
+
+# ---------------------------------------------------------------------------
 head_section "Dreamcast BIOS"
 # ---------------------------------------------------------------------------
 

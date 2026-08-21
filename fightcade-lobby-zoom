@@ -1,0 +1,175 @@
+#!/bin/bash
+# Keep the Fightcade lobby (Electron/Chromium) zoom separate for HD and CRT.
+#
+# Fightcade persists one shared per-host zoom in its Preferences file, so a zoom
+# that looks right on a 1080p panel is too big on a 640x480 CRT (and vice versa).
+# EmulationStation keeps HD and CRT layouts apart; this does the same for the lobby:
+#
+#   apply  (gameStart, before Fightcade launches): write the saved zoom for the
+#          current display mode into Preferences so the lobby opens at the right size.
+#   save   (gameStop, after Fightcade exits): read the possibly user-adjusted zoom
+#          back out and store it under the mode that was active at launch.
+#
+# Mode detection mirrors fightcade-pad-mouse crt_cursor_profile: CRT = sub-1024-wide
+# desktop with Switchres present (or the .force flag); HD otherwise (or the .disable
+# flag). Values are Chromium zoom LEVELS: 0 = 100%, each +/-1 is about 1.2x.
+
+set -uo pipefail
+
+APP_ID="com.fightcade.Fightcade"
+FC_CFG="/userdata/saves/flatpak/data/.var/app/${APP_ID}/config/Fightcade"
+PREFS="${FC_CFG}/Preferences"
+HOST="web.fightcade.com"
+
+CONF="/userdata/system/configs/fightcade-lobby-zoom.conf"
+MODE_STATE="/tmp/fightcade-lobby-zoom.mode"
+
+CRT_DISABLE="/userdata/system/configs/fightcade-switchres.disable"
+CRT_FORCE="/userdata/system/configs/fightcade-switchres.force"
+
+log() { printf 'fightcade-lobby-zoom: %s\n' "$*"; }
+
+detect_mode() {
+    [ -f "$CRT_DISABLE" ] && { echo hd; return; }
+    [ -f "$CRT_FORCE" ] && { echo crt; return; }
+    local w=""
+    w=$(DISPLAY=:0 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9][0-9]*\) x .*/\1/p' | head -1)
+    if [ -z "$w" ]; then
+        w=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -1)
+        w="${w%%x*}"
+    fi
+    case "$w" in
+        '' | *[!0-9]*) echo hd; return ;;
+    esac
+    if [ "$w" -lt 1024 ] && [ -x /usr/bin/switchres ]; then
+        echo crt
+    else
+        echo hd
+    fi
+}
+
+conf_get() {
+    local key="$1"
+    [ -f "$CONF" ] || return 0
+    sed -n "s/^${key}=//p" "$CONF" | tail -1
+}
+
+conf_set() {
+    local key="$1" val="$2"
+    mkdir -p "$(dirname "$CONF")"
+    if [ ! -f "$CONF" ]; then
+        cat > "$CONF" <<'EOF'
+# Fightcade lobby zoom, saved separately per display mode.
+# Auto-updated when you exit Fightcade; edit to override (applied on next launch).
+# Values are Chromium zoom LEVELS: 0 = 100%, each +/-1 is about 1.2x.
+zoom_hd=
+zoom_crt=
+EOF
+    fi
+    if grep -q "^${key}=" "$CONF"; then
+        sed -i "s#^${key}=.*#${key}=${val}#" "$CONF"
+    else
+        printf '%s=%s\n' "$key" "$val" >> "$CONF"
+    fi
+}
+
+prefs_get_zoom() {
+    [ -f "$PREFS" ] || return 0
+    HOST="$HOST" PREFS="$PREFS" python3 - <<'PY'
+import json, os, sys
+try:
+    with open(os.environ["PREFS"], encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)
+host = os.environ["HOST"]
+levels = data.get("partition", {}).get("per_host_zoom_levels", {})
+for part in levels.values():
+    if isinstance(part, dict) and host in part:
+        print(part[host])
+        break
+PY
+}
+
+prefs_set_zoom() {
+    local level="$1"
+    [ -f "$PREFS" ] || { log "no Preferences yet; skip apply"; return 0; }
+    HOST="$HOST" PREFS="$PREFS" LEVEL="$level" python3 - <<'PY'
+import json, os, sys
+prefs = os.environ["PREFS"]
+host = os.environ["HOST"]
+try:
+    level = float(os.environ["LEVEL"])
+except ValueError:
+    sys.exit(0)
+try:
+    with open(prefs, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)
+levels = data.setdefault("partition", {}).setdefault("per_host_zoom_levels", {})
+# Only modify existing partitions: Chromium keys them by an internal partition-id
+# hash we cannot reproduce, so inventing one would be silently ignored anyway.
+changed = False
+for part in levels.values():
+    if isinstance(part, dict):
+        part[host] = level
+        changed = True
+if not changed:
+    sys.exit(0)
+tmp = prefs + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, separators=(",", ":"))
+os.replace(tmp, prefs)
+PY
+}
+
+cmd_apply() {
+    local mode zoom
+    mode=$(detect_mode)
+    echo "$mode" > "$MODE_STATE" 2>/dev/null || true
+    zoom=$(conf_get "zoom_${mode}")
+    if [ -z "$zoom" ]; then
+        log "no saved zoom for ${mode}; leaving Preferences as-is"
+        return 0
+    fi
+    prefs_set_zoom "$zoom"
+    log "applied ${mode} zoom level ${zoom}"
+}
+
+cmd_save() {
+    local mode="" zoom
+    if [ -f "$MODE_STATE" ]; then
+        mode=$(cat "$MODE_STATE" 2>/dev/null)
+    fi
+    [ -n "$mode" ] || mode=$(detect_mode)
+    zoom=$(prefs_get_zoom)
+    if [ -z "$zoom" ]; then
+        log "no live zoom found; nothing to save for ${mode}"
+        return 0
+    fi
+    conf_set "zoom_${mode}" "$zoom"
+    log "saved ${mode} zoom level ${zoom}"
+    rm -f "$MODE_STATE"
+}
+
+cmd_status() {
+    local mode
+    mode=$(detect_mode)
+    echo "mode:        ${mode}"
+    echo "config:      ${CONF}"
+    echo "  zoom_hd    = $(conf_get zoom_hd)"
+    echo "  zoom_crt   = $(conf_get zoom_crt)"
+    echo "live zoom (${HOST}): $(prefs_get_zoom)"
+}
+
+case "${1:-}" in
+    apply)  cmd_apply ;;
+    save)   cmd_save ;;
+    status) cmd_status ;;
+    detect) detect_mode ;;
+    *)
+        echo "Usage: ${0##*/} apply|save|status|detect" >&2
+        exit 1
+        ;;
+esac

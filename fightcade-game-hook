@@ -15,6 +15,7 @@ SYNC_SCRIPT="${PROJECT_DIR}/fightcade-roms-sync"
 CRT_HOSTD="${PROJECT_DIR}/crt/fightcade-crt-hostd"
 CRT_RECOVER="${PROJECT_DIR}/crt/fightcade-crt-recover"
 PAD_MOUSE="${PROJECT_DIR}/input/fightcade-pad-mouse"
+LOBBY_ZOOM="${PROJECT_DIR}/fightcade-lobby-zoom"
 
 [ "$SYSTEM" = "flatpak" ] || exit 0
 
@@ -31,6 +32,7 @@ else
 fi
 
 if [ "$EVENT" = "gameStop" ]; then
+    [ -x "$LOBBY_ZOOM" ] && "$LOBBY_ZOOM" save >>/tmp/fightcade-lobby-zoom.log 2>&1 || true
     [ -x "$PAD_MOUSE" ] && "$PAD_MOUSE" stop
     [ -x "$CRT_HOSTD" ] && "$CRT_HOSTD" stop
     [ -x "$CRT_RECOVER" ] && "$CRT_RECOVER"
@@ -38,6 +40,12 @@ if [ "$EVENT" = "gameStop" ]; then
 fi
 
 # --- gameStart ---
+
+# Runs before Fightcade launches, so Chromium reads the mode-correct lobby zoom
+# from Preferences at startup. Must stay synchronous (not backgrounded).
+if [ -x "$LOBBY_ZOOM" ]; then
+    "$LOBBY_ZOOM" apply >>/tmp/fightcade-lobby-zoom.log 2>&1 || true
+fi
 
 if [ -x "$SYNC_SCRIPT" ]; then
     "$SYNC_SCRIPT" --quiet
