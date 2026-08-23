@@ -1,29 +1,20 @@
 #!/bin/bash
-# Uninstaller for the Fightcade Flatpak ROMs installer.
+# Uninstaller for the Fightcade Flatpak installer.
 #
-# Removes:
-#   - Patched Flatpak xdg-open (restored from backup)
+# Completely removes Fightcade and all related files:
+#   - All running Fightcade processes (switchres, emulators, daemons)
+#   - The Fightcade Flatpak application
+#   - Flatpak app-data tree (config + downloaded game assets)
 #   - CRT host watcher, Switchres wrapper, recovery helper, pad kbd blocker
 #   - Game hook from /userdata/system/scripts/
-#   - Managed symlinks under ROMs/ (arcade per-zip and dir links)
-#   - Flatpak filesystem overrides for the managed host paths
-#   - Installer scripts from /userdata/system/fightcade-flatpak/ (input/, crt/, etc.)
-#
-# Note: fightcade-pad-mouse may keep running until Fightcade is closed; the
-# project dir is removed so it cannot restart after uninstall.
-#
-# Does NOT remove (default light uninstall):
-#   - The Fightcade Flatpak itself (use --uninstall-flatpak to also remove it)
-#   - Real ROMs or any user files
-#   - The ROMs/ scaffold directories (real dirs remain so Fightcade still starts)
-#
-# Full wipe (--purge, implies --uninstall-flatpak) ALSO removes:
-#   - The Flatpak app-data tree (config + downloaded game assets, hundreds of MB)
-#   - The EmulationStation launcher entry, artwork, and gamelist node in ROMs/flatpak
-#   - Fightcade logs (/userdata/system/logs) and configs (/userdata/system/configs)
+#   - ROM symlinks (arcade per-zip and dir links)
+#   - Flatpak filesystem overrides
+#   - Installer scripts from /userdata/system/fightcade-flatpak/
+#   - EmulationStation launcher entry, artwork, and gamelist node
+#   - Fightcade logs and configs
 #   - Orphaned flatpak runtimes (only when no other flatpak app remains)
-#   - Dangling flatpak overrides and OSTree repo refs
-#   Real ROMs under /userdata/roms/* and /userdata/bios are NEVER touched.
+#
+# Your ROM files under /userdata/roms/* and /userdata/bios are NEVER touched.
 
 set -eu
 
@@ -41,8 +32,6 @@ LOGS_DIR="/userdata/system/logs"
 CONFIGS_DIR="/userdata/system/configs"
 
 AUTO_YES=0
-UNINSTALL_FLATPAK=0
-PURGE=0
 
 info()   { printf '%s\n'       "$*"; }
 ok()     { printf '[ OK ] %s\n' "$*"; }
@@ -54,22 +43,19 @@ usage() {
     cat <<USAGE
 Usage: uninstall.sh [options]
 
+Completely removes Fightcade and all related files.
+Your ROM files and BIOS are never touched.
+
 Options:
-  -y, --yes               Accept all prompts automatically.
-      --uninstall-flatpak Also uninstall the Fightcade Flatpak (com.fightcade.Fightcade).
-      --purge, --all      Full wipe: remove the app, its data tree, launcher entry,
-                          logs, configs, orphaned runtimes, and repo refs.
-                          Implies --uninstall-flatpak. Keeps roms and bios.
-  -h, --help              Show this help.
+  -y, --yes    Accept all prompts automatically.
+  -h, --help   Show this help.
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -y|--yes)               AUTO_YES=1 ;;
-        --uninstall-flatpak)    UNINSTALL_FLATPAK=1 ;;
-        --purge|--all)          PURGE=1; UNINSTALL_FLATPAK=1 ;;
-        -h|--help)              usage; exit 0 ;;
+        -y|--yes) AUTO_YES=1 ;;
+        -h|--help) usage; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
     shift
@@ -106,17 +92,30 @@ ask_yes_no() {
 }
 
 printf '%s\n' '------------------------------------------------------------'
-printf '%s\n' ' Fightcade Flatpak ROMs Uninstaller'
+printf '%s\n' ' Fightcade Flatpak Complete Removal'
 printf '%s\n' '------------------------------------------------------------'
 printf '\n'
 
-ask_yes_no "Remove Fightcade Flatpak ROMs installer (links, hook, overrides, scripts)?" "yes" || {
+ask_yes_no "Completely remove Fightcade and all related files? (ROMs/BIOS untouched)" "yes" || {
     info "Uninstall cancelled."
     exit 0
 }
 
 # ---------------------------------------------------------------------------
-# 0. CRT recovery + restore patched Flatpak xdg-open
+# 0. Kill all running Fightcade processes
+# ---------------------------------------------------------------------------
+notice "Stopping all Fightcade processes..."
+pkill -f fightcade-crt-switchres 2>/dev/null || true
+pkill -f fightcade-crt-hostd 2>/dev/null || true
+pkill -f fightcade-pad-mouse 2>/dev/null || true
+pkill -f fcadefbneo 2>/dev/null || true
+pkill -f fcadesnes9x 2>/dev/null || true
+pkill -f flycast 2>/dev/null || true
+sleep 1
+ok "All Fightcade processes stopped"
+
+# ---------------------------------------------------------------------------
+# 1. CRT recovery + restore patched Flatpak xdg-open
 # ---------------------------------------------------------------------------
 CRT_RECOVER="${PROJECT_DIR}/crt/fightcade-crt-recover"
 LEGACY_CRT_RECOVER="${PROJECT_DIR}/fightcade-crt-recover"
@@ -147,7 +146,7 @@ if [ -n "$deploy" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Remove game hook
+# 2. Remove game hook
 # ---------------------------------------------------------------------------
 HOOK="${SCRIPTS_DIR}/fightcade-game-hook"
 if [ -f "$HOOK" ]; then
@@ -158,7 +157,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Remove managed dir symlinks
+# 3. Remove managed dir symlinks
 # ---------------------------------------------------------------------------
 notice "Removing managed dir symlinks..."
 
@@ -198,7 +197,7 @@ remove_managed_link "${ROMS_ROOT}/flycast/dreamcast"   "${HOST_ROMS}/dreamcast"
 ok "Dir symlinks removed"
 
 # ---------------------------------------------------------------------------
-# 3. Remove managed arcade per-zip symlinks
+# 4. Remove managed arcade per-zip symlinks
 # ---------------------------------------------------------------------------
 notice "Removing managed arcade per-zip symlinks..."
 arcade_removed=0
@@ -219,7 +218,7 @@ fi
 ok "Arcade symlinks removed: ${arcade_removed}"
 
 # ---------------------------------------------------------------------------
-# 3a. Remove managed Dreamcast per-file symlinks (ROMs/flycast/*.chd|.cdi)
+# 4a. Remove managed Dreamcast per-file symlinks (ROMs/flycast/*.chd|.cdi)
 # ---------------------------------------------------------------------------
 notice "Removing managed Dreamcast per-file symlinks..."
 dc_removed=0
@@ -240,7 +239,7 @@ fi
 ok "Dreamcast symlinks removed: ${dc_removed}"
 
 # ---------------------------------------------------------------------------
-# 3b. Remove _fightcade.txt requirement notes
+# 4b. Remove _fightcade.txt requirement notes
 # ---------------------------------------------------------------------------
 notice "Removing _fightcade.txt notes..."
 
@@ -253,7 +252,7 @@ done
 ok "_fightcade.txt notes removed"
 
 # ---------------------------------------------------------------------------
-# 4. Remove Flatpak filesystem overrides
+# 5. Remove Flatpak filesystem overrides
 # ---------------------------------------------------------------------------
 notice "Removing Flatpak filesystem overrides..."
 
@@ -288,7 +287,7 @@ flatpak override --system --unset-env=vblank_mode "${APP_ID}" 2>/dev/null || tru
 ok "Flatpak overrides removed"
 
 # ---------------------------------------------------------------------------
-# 5. Remove installer scripts
+# 6. Remove installer scripts
 # ---------------------------------------------------------------------------
 if [ -d "$PROJECT_DIR" ]; then
     rm -rf "$PROJECT_DIR"
@@ -298,52 +297,44 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Optionally uninstall the Flatpak itself
+# 7. Uninstall the Fightcade Flatpak application (not Flatpak itself)
 # ---------------------------------------------------------------------------
-if [ "${UNINSTALL_FLATPAK}" -eq 1 ]; then
-    notice "Uninstalling Fightcade Flatpak..."
-    if flatpak info --system "${APP_ID}" >/dev/null 2>&1; then
-        flatpak uninstall --system -y "${APP_ID}" && ok "Fightcade Flatpak uninstalled" || \
-            warn "Flatpak uninstall did not complete cleanly"
-    else
-        notice "Fightcade Flatpak was not installed system-wide; nothing to remove"
-    fi
+notice "Uninstalling Fightcade Flatpak application..."
+if flatpak info --system "${APP_ID}" >/dev/null 2>&1; then
+    flatpak uninstall --system -y "${APP_ID}" && ok "Fightcade Flatpak application uninstalled" || \
+        warn "Flatpak uninstall did not complete cleanly"
+else
+    notice "Fightcade Flatpak was not installed system-wide; nothing to remove"
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Full purge (--purge): app data, ES launcher, logs, configs, runtimes, refs
+# 8. Remove app data, ES launcher, logs, configs, runtimes, refs
 #    Every deletion below is pinned to an exact Fightcade path. Real ROMs under
 #    /userdata/roms/* and /userdata/bios are never touched.
 # ---------------------------------------------------------------------------
-if [ "${PURGE}" -eq 1 ]; then
-    notice "Purging all remaining Fightcade data..."
+notice "Removing all remaining Fightcade data..."
 
-    # Stop the pad-mouse daemon if it somehow survived the project-dir removal.
-    if pkill -f fightcade-pad-mouse 2>/dev/null; then
-        ok "Stopped fightcade-pad-mouse daemon"
-    fi
+# Flatpak app-data tree: config + everything Fightcade downloaded (game assets).
+if [ -d "$FLATPAK_APP_ROOT" ]; then
+    rm -rf "$FLATPAK_APP_ROOT"
+    ok "Removed Flatpak app data: ${FLATPAK_APP_ROOT}"
+else
+    notice "Flatpak app data already absent"
+fi
 
-    # Flatpak app-data tree: config + everything Fightcade downloaded (game assets).
-    if [ -d "$FLATPAK_APP_ROOT" ]; then
-        rm -rf "$FLATPAK_APP_ROOT"
-        ok "Removed Flatpak app data: ${FLATPAK_APP_ROOT}"
-    else
-        notice "Flatpak app data already absent"
-    fi
+# EmulationStation launcher entry + artwork + stale gamelist backup.
+rm -f "${FLATPAK_ROMS}/Fightcade.flatpak" \
+      "${FLATPAK_ROMS}/images/Fightcade-logo.png" \
+      "${FLATPAK_ROMS}/images/Fightcade-thumb.png" \
+      "${FLATPAK_ROMS}/images/Fightcade.png" \
+      "${FLATPAK_ROMS}/gamelist.xml.bak"
+ok "Removed EmulationStation launcher entry and artwork"
 
-    # EmulationStation launcher entry + artwork + stale gamelist backup.
-    rm -f "${FLATPAK_ROMS}/Fightcade.flatpak" \
-          "${FLATPAK_ROMS}/images/Fightcade-logo.png" \
-          "${FLATPAK_ROMS}/images/Fightcade-thumb.png" \
-          "${FLATPAK_ROMS}/images/Fightcade.png" \
-          "${FLATPAK_ROMS}/gamelist.xml.bak"
-    ok "Removed EmulationStation launcher entry and artwork"
-
-    # Drop the Fightcade <game> node from the flatpak gamelist (keep the file so
-    # the ES Flatpak system stays valid for other apps).
-    if [ -f "${FLATPAK_ROMS}/gamelist.xml" ] && \
-       grep -q "Fightcade.flatpak" "${FLATPAK_ROMS}/gamelist.xml"; then
-        cat > "${FLATPAK_ROMS}/gamelist.xml" <<'XML'
+# Drop the Fightcade <game> node from the flatpak gamelist (keep the file so
+# the ES Flatpak system stays valid for other apps).
+if [ -f "${FLATPAK_ROMS}/gamelist.xml" ] && \
+   grep -q "Fightcade.flatpak" "${FLATPAK_ROMS}/gamelist.xml"; then
+    cat > "${FLATPAK_ROMS}/gamelist.xml" <<'XML'
 <?xml version="1.0"?>
 <gameList>
 	<game>
@@ -351,45 +342,47 @@ if [ "${PURGE}" -eq 1 ]; then
 	</game>
 </gameList>
 XML
-        ok "Cleaned Fightcade entry from ${FLATPAK_ROMS}/gamelist.xml"
-    fi
-
-    # Fightcade logs and configs.
-    rm -f "${LOGS_DIR}"/fightcade-*.log \
-          "${CONFIGS_DIR}"/fightcade-*.conf
-    ok "Removed Fightcade logs and configs"
-
-    # Remove orphaned flatpak runtimes (Wine + Freedesktop pulled in for Fightcade),
-    # but only when no other flatpak app remains, so we never break another app.
-    if [ -z "$(flatpak list --app --columns=application 2>/dev/null)" ]; then
-        flatpak uninstall --system --unused -y >/dev/null 2>&1 || true
-        ok "Removed unused flatpak runtimes"
-    else
-        notice "Other flatpak apps present; kept shared runtimes"
-    fi
-
-    # Dangling override + OSTree repo refs left behind after the app is gone.
-    rm -f "${FLATPAK_OVERRIDES}/${APP_ID}"
-    rm -rf "${FLATPAK_REPO}/refs/heads/deploy/app/${APP_ID}" \
-           "${FLATPAK_REPO}/refs/heads/deploy/runtime/${APP_ID}.Locale" \
-           "${FLATPAK_REPO}/refs/remotes/flathub/app/${APP_ID}" \
-           "${FLATPAK_REPO}/refs/remotes/flathub/runtime/${APP_ID}.Locale"
-    flatpak repair --system >/dev/null 2>&1 || true
-    ok "Removed dangling flatpak refs and pruned repo"
+    ok "Cleaned Fightcade entry from ${FLATPAK_ROMS}/gamelist.xml"
 fi
+
+# Fightcade logs and configs.
+rm -f "${LOGS_DIR}"/fightcade-*.log \
+      "${CONFIGS_DIR}"/fightcade-*.conf
+ok "Removed Fightcade logs and configs"
+
+# Remove orphaned flatpak runtimes (Wine + Freedesktop pulled in for Fightcade),
+# but only when no other flatpak app remains, so we never break another app.
+if [ -z "$(flatpak list --app --columns=application 2>/dev/null)" ]; then
+    flatpak uninstall --system --unused -y >/dev/null 2>&1 || true
+    ok "Removed unused flatpak runtimes"
+else
+    notice "Other flatpak apps present; kept shared runtimes"
+fi
+
+# Dangling override + OSTree repo refs left behind after the app is gone.
+rm -f "${FLATPAK_OVERRIDES}/${APP_ID}"
+rm -rf "${FLATPAK_REPO}/refs/heads/deploy/app/${APP_ID}" \
+       "${FLATPAK_REPO}/refs/heads/deploy/runtime/${APP_ID}.Locale" \
+       "${FLATPAK_REPO}/refs/remotes/flathub/app/${APP_ID}" \
+       "${FLATPAK_REPO}/refs/remotes/flathub/runtime/${APP_ID}.Locale"
+flatpak repair --system >/dev/null 2>&1 || true
+ok "Removed dangling flatpak refs and pruned repo"
 
 printf '\n'
 printf '%s\n' '------------------------------------------------------------'
-printf '%s\n' ' Uninstall complete'
+printf '%s\n' ' Complete removal finished'
 printf '%s\n' '------------------------------------------------------------'
 info ""
-if [ "${PURGE}" -eq 1 ]; then
-    info "Full purge done. Fightcade, its app data, launcher, logs, configs,"
-    info "and orphaned runtimes were removed. Your ROMs under /userdata/roms"
-    info "and /userdata/bios were not touched."
-else
-    info "The ROMs scaffold directories under ROMs/ were left in place so"
-    info "Fightcade can still start. Your actual ROM files are untouched."
-    info "Run with --purge to also remove the app data, launcher, and runtimes."
-fi
+info "Fightcade has been completely removed, including:"
+info "  - The Fightcade Flatpak application (com.fightcade.Fightcade)"
+info "  - All configuration and downloaded game assets"
+info "  - ROM symlinks and installer scripts"
+info "  - Game hooks, logs, and configs"
+info "  - EmulationStation launcher entry"
+info ""
+info "Flatpak itself remains available for other applications."
+info "Your ROM files under /userdata/roms and /userdata/bios were not touched."
+info ""
+info "You can reinstall anytime with:"
+info "  curl -fsSL https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh | bash -s -- -y"
 info ""

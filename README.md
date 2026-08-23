@@ -141,9 +141,30 @@ When a source directory does not exist, an empty real directory is created inste
 Re-running the installer is safe: it creates missing links, refreshes changed ones,
 reapplies HD video defaults, and does not modify real user files.
 
-- **Uninstall:** `/userdata/system/fightcade-flatpak/uninstall.sh` removes links, hook,
-  overrides, the xdg-open patch, and scripts (ROMs and Flatpak untouched). Add
-  `--uninstall-flatpak` to also remove the Fightcade Flatpak.
+### Uninstall
+
+To completely remove Fightcade and all related files:
+
+```bash
+/userdata/system/fightcade-flatpak/uninstall.sh -y
+```
+
+This removes **everything Fightcade-related**:
+
+- All running Fightcade processes (stops switchres, emulators, daemons)
+- The Fightcade Flatpak application (com.fightcade.Fightcade)
+- All Fightcade configuration and downloaded game assets
+- ROM symlinks (your actual ROM files are never touched)
+- Game hooks, scripts, and artwork
+- EmulationStation launcher entry
+- Logs and configs
+- Orphaned Flatpak runtimes (Wine, Freedesktop - only if no other Flatpak apps remain)
+
+**Your ROMs in `/userdata/roms/` and BIOS files in `/userdata/bios/` are never touched.**
+
+**Flatpak itself (the package manager) is not removed and remains available for other apps.**
+
+After uninstall, you can reinstall fresh anytime with the install command.
 
 ## Troubleshooting
 
