@@ -37,6 +37,7 @@ resolution and refresh rate, then restores menu timing when the session ends.
 
 - [Fightcade resolution](#fightcade-resolution)
 - [Controls (CRT)](#controls-crt)
+- [Settings persistence](#settings-persistence)
 - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
 - [Recovery](#recovery)
@@ -73,6 +74,19 @@ as documented in the [context table](CONTROLS.md#context-table).
 > Once the emulator menu has been opened mid-game, some button combos (**WEST** / **NORTH**
 > together with another button) can be misread afterward and may toggle Switchres on or off.
 > Quit to the lobby (**SELECT + Start**) and relaunch the game so it starts in a clean state.
+
+### Settings persistence
+
+**Per-game settings persist** (DIP switches, input remaps, game-specific video tweaks, sound volume):
+- Saved to `config/fcadefbneo/games/romname.ini` per ROM
+- Never touched by the installer or CRT scripts
+
+**Global video settings reset by design** (resolution, fullscreen mode, vsync, aspect ratio):
+- Saved to main `config/fcadefbneo/fcadefbneo.ini`
+- **Automatically reset** when returning to the lobby after a CRT game (Switchres restores HD baseline via `hd/patch-hd-video.sh`)
+- This is intentional to ensure the lobby always has correct display settings
+
+If you change global video settings in FBNeo's menu and they revert after exiting to the lobby, that's expected. CRT scripts restore the lobby baseline after each game. Per-game settings like DIP switches and controls always persist.
 
 ## Keyboard (FBNeo / SNES)
 

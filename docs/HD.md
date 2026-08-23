@@ -31,6 +31,14 @@ legacy channels, but you can ignore it unless you play in those rooms. The HD pa
 only touches `ggpofba.ini` when that file already exists (after you launch legacy FBA
 once).
 
+## Settings persistence
+
+**All emulator settings persist normally** after the initial install (DIP switches, input remaps, video settings, sound volume). The installer applies HD defaults once during setup, then Fightcade behaves like stock.
+
+If you change display mode (e.g. switch from 1080p to 1440p), manually re-run `hd/patch-hd-video.sh` to update emulator fullscreen sizes.
+
+**CRT users:** Global video settings reset after each game because Switchres restoration runs the HD patch to restore the lobby baseline. See [CRT.md — Settings persistence](CRT.md#settings-persistence). Per-game settings always persist.
+
 Preset files live in the Flatpak data tree:
 
 ```
