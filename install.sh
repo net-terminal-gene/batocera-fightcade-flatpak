@@ -327,6 +327,28 @@ install_pad_mouse_config() {
   fi
 }
 
+seed_lobby_chat_settings() {
+  # Seed the per-game EDIT LOBBY CHAT keys from the current chat config so the
+  # Advanced Game Options fields show the active macros instead of blanks. Only
+  # seed a key that is ABSENT so a value the user already set in ES is never
+  # clobbered, and the first launch after install does not wipe the defaults.
+  local conf="/userdata/system/configs/fightcade-lobby-chat.conf"
+  local bconf="/userdata/system/batocera.conf"
+  local slot key val line seeded=0
+  [ -f "${conf}" ] || return 0
+  command -v batocera-settings-set >/dev/null 2>&1 || return 0
+  for slot in south east west north r2; do
+    key="flatpak[\"Fightcade.flatpak\"].fclobby_${slot}"
+    grep -Fq -- "${key}=" "${bconf}" 2>/dev/null && continue
+    line=$(grep -E "^${slot}=" "${conf}" | tail -1) || true
+    [ -n "${line}" ] || continue
+    val="${line#*=}"
+    batocera-settings-set "${key}" "${val}" 2>/dev/null || true
+    seeded=1
+  done
+  [ "${seeded}" -eq 1 ] && ok "EDIT LOBBY CHAT fields seeded from ${conf}" || true
+}
+
 ES_FEATURES_CHANGED=0
 install_es_features() {
   # Batocera merges es_features_*.cfg from this dir with the system es_features.cfg
@@ -552,6 +574,7 @@ done
 record_install_branch
 link_cli_tools "${PROJECT_DIR}"
 install_chat_config
+seed_lobby_chat_settings
 install_pad_mouse_config
 install_es_features
 ok "Scripts installed to ${PROJECT_DIR}"

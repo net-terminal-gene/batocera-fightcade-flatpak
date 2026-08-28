@@ -24,10 +24,49 @@ LOG_DIR="/userdata/system/logs"
 # which writes flatpak["Fightcade.flatpak"].fcdebug = 1 (ON) or empty (OFF).
 FC_DEBUG_FLAG="/tmp/fightcade-debug.on"
 
+# Lobby chat macros edited per game in Advanced Game Options ("EDIT LOBBY CHAT").
+# Each slot is stored as flatpak["Fightcade.flatpak"].fclobby_<slot> and synced into
+# the pad-mouse chat config at gameStart (see sync_lobby_chat).
+LOBBY_CHAT_CONF="/userdata/system/configs/fightcade-lobby-chat.conf"
+LOBBY_CHAT_SHIPPED="${PROJECT_DIR}/input/fightcade-lobby-chat.conf"
+BATOCERA_CONF="/userdata/system/batocera.conf"
+
 fightcade_debug_enabled() {
     local v
     v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcdebug' 2>/dev/null | tr -d '[:space:]')
     [ "$v" = "1" ]
+}
+
+# Write one lobby-chat slot into LOBBY_CHAT_CONF from its batocera.conf key.
+# A key that is PRESENT (even empty) is authoritative: its value replaces that
+# slot line, and an empty value disables the slot. A key that is ABSENT is left
+# untouched, so a manually edited .conf survives. Values may contain spaces and
+# punctuation, so the raw text after the first '=' is used verbatim and passed to
+# awk via the environment to avoid any quoting/escaping pitfalls.
+sync_lobby_chat_slot() {
+    local slot="$1" key line val
+    key="flatpak[\"Fightcade.flatpak\"].fclobby_${slot}"
+    line=$(grep -F -- "${key}=" "$BATOCERA_CONF" 2>/dev/null | tail -1)
+    [ -n "$line" ] || return 0
+    val="${line#*=}"
+    if [ ! -f "$LOBBY_CHAT_CONF" ] && [ -f "$LOBBY_CHAT_SHIPPED" ]; then
+        cp -f "$LOBBY_CHAT_SHIPPED" "$LOBBY_CHAT_CONF" 2>/dev/null || true
+    fi
+    [ -f "$LOBBY_CHAT_CONF" ] || return 0
+    SLOT="$slot" NEWVAL="$val" awk '
+        BEGIN { s = ENVIRON["SLOT"]; done = 0 }
+        $0 ~ ("^" s "=") { print s "=" ENVIRON["NEWVAL"]; done = 1; next }
+        { print }
+        END { if (!done) print s "=" ENVIRON["NEWVAL"] }
+    ' "$LOBBY_CHAT_CONF" > "${LOBBY_CHAT_CONF}.tmp" 2>/dev/null \
+        && mv "${LOBBY_CHAT_CONF}.tmp" "$LOBBY_CHAT_CONF"
+}
+
+sync_lobby_chat() {
+    local slot
+    for slot in south east west north r2; do
+        sync_lobby_chat_slot "$slot"
+    done
 }
 
 [ "$SYSTEM" = "flatpak" ] || exit 0
@@ -76,6 +115,9 @@ if fightcade_debug_enabled; then
 else
     rm -f "$FC_DEBUG_FLAG"
 fi
+
+# Push any per-game lobby-chat edits into the conf before pad-mouse starts below.
+sync_lobby_chat
 
 # Runs before Fightcade launches, so Chromium reads the mode-correct lobby zoom
 # from Preferences at startup. Must stay synchronous (not backgrounded).
