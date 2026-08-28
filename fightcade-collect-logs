@@ -1,0 +1,414 @@
+#!/bin/bash
+# Read-only log/state collector for the Fightcade Flatpak setup.
+#
+# Gathers general Fightcade + display state (logs, config, display, processes) for
+# debugging whatever the user is reporting. It does not assume a specific bug.
+#
+# Nothing is modified. Output is ONE plain-text report under /userdata/system/logs/
+# (fightcade-debug-<timestamp>.txt). It is drag-and-drop friendly (attach it to a
+# GitHub issue or Discord message) and cat-friendly (paste it inline in Discord):
+#   cat /userdata/system/logs/fightcade-debug-*.txt
+#
+# Modes:
+#   fightcade-collect-logs                 one-shot snapshot -> single .txt
+#   fightcade-collect-logs --watch [SECS]  sample display + logs every second for
+#                                          SECS (default 180), then write the .txt.
+#                                          Run this, then reproduce the issue in-game.
+#
+# Usage tip: start --watch BEFORE you launch the match, reproduce the issue, then let
+# it finish (or press Ctrl+C early) and send the .txt it prints at the end.
+
+set -u
+
+APP_ID="com.fightcade.Fightcade"
+PROJECT_DIR="/userdata/system/fightcade-flatpak"
+CRT_DIR="${PROJECT_DIR}/crt"
+INPUT_DIR="${PROJECT_DIR}/input"
+FC_DATA="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+LOGS_DIR="/userdata/system/logs"
+CONFIGS_DIR="/userdata/system/configs"
+
+SWITCHRES_LOG="${LOGS_DIR}/fightcade-crt-switchres.log"
+INSTALL_LOG="${LOGS_DIR}/fightcade-flatpak-install.log"
+PADMOUSE_LOG="/tmp/pad-mouse.log"
+ZOOM_LOG="/tmp/fightcade-lobby-zoom.log"
+
+STAMP="$(date '+%Y%m%d-%H%M%S')"
+OUT_DIR="$(mktemp -d "/tmp/fc-collect-${STAMP}.XXXXXX")"
+# One consolidated, human-readable report. Everything collected is plain text, so
+# instead of a tarball we concatenate the sections into a single .txt at the end.
+REPORT="${LOGS_DIR}/fightcade-debug-${STAMP}.txt"
+
+WATCH=0
+WATCH_SECS=180
+# --auto: unattended snapshot for the gameStop hook. Skips the interactive pad
+# probe (it waits for live button presses) and the slower diagnose step so it can
+# run backgrounded at game exit without delaying the return to the lobby.
+AUTO=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --watch) WATCH=1; [ "${2:-}" ] && case "$2" in ''|*[!0-9]*) ;; *) WATCH_SECS="$2"; shift ;; esac ;;
+        --auto) AUTO=1 ;;
+        -h|--help)
+            sed -n '2,25p' "$0"
+            exit 0
+            ;;
+        *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+pick_display() {
+    [ -S /tmp/.X11-unix/X0 ] && { echo ":0.0"; return; }
+    [ -S /tmp/.X11-unix/X1 ] && { echo ":1.0"; return; }
+    echo ":0.0"
+}
+DISPLAY_ID="$(pick_display)"
+export DISPLAY="$DISPLAY_ID"
+
+say() { printf '%s\n' "$*"; }
+hdr() { printf '\n===== %s =====\n' "$*"; }
+
+# Run a command with a hard wall-clock cap so no single step can hang the whole
+# collection (xdotool / batocera-resolution can block against a mid-modeset X server).
+HAVE_TIMEOUT=0
+command -v timeout >/dev/null 2>&1 && HAVE_TIMEOUT=1
+capped() {
+    local secs="$1"; shift
+    if [ "$HAVE_TIMEOUT" -eq 1 ]; then
+        timeout "$secs" "$@"
+    else
+        "$@" &
+        local p=$!
+        ( sleep "$secs"; kill -0 "$p" 2>/dev/null && kill "$p" 2>/dev/null ) &
+        local w=$!
+        wait "$p" 2>/dev/null
+        local rc=$?
+        kill "$w" 2>/dev/null
+        return "$rc"
+    fi
+}
+# Short helpers for the two X-facing tools used everywhere.
+bres()  { capped 4 batocera-resolution "$@" 2>/dev/null; }
+xdt()   { capped 4 xdotool "$@" 2>/dev/null; }
+
+copy_if() {
+    # copy_if <src> <destname>
+    local src="$1" name="$2"
+    if [ -f "$src" ]; then
+        cp -f "$src" "${OUT_DIR}/${name}" 2>/dev/null && say "  captured ${name}"
+    else
+        printf '(absent) %s\n' "$src" >> "${OUT_DIR}/MISSING.txt"
+    fi
+}
+
+collect_environment() {
+    local f="${OUT_DIR}/00-environment.txt"
+    {
+        echo "Fightcade log collection"
+        echo "collected: $(date '+%F %T %z')"
+        echo "host: $(hostname 2>/dev/null)"
+        echo "batocera version: $(cat /usr/share/batocera/batocera.version 2>/dev/null || echo unknown)"
+        echo "kernel: $(uname -a)"
+        echo "DISPLAY used: ${DISPLAY_ID}"
+        echo
+
+        echo "-- install type --"
+        if [ -d "$PROJECT_DIR" ]; then
+            echo "Flatpak installer present: ${PROJECT_DIR}"
+            echo "install branch: $(cat "${PROJECT_DIR}/.install-branch" 2>/dev/null || echo unknown)"
+        else
+            echo "Flatpak installer NOT present at ${PROJECT_DIR}"
+        fi
+        if [ -f /userdata/system/switchres_fightcade_wrap.sh ] \
+           || ls /userdata/system/*fightcade*wrap* >/dev/null 2>&1; then
+            echo "WARNING: a legacy batocera-unofficial-addons wrapper may be present (does not log to disk)"
+        fi
+        echo
+
+        echo "-- flatpak app --"
+        flatpak info --system "${APP_ID}" 2>&1 | sed -n '1,12p'
+        echo
+        echo "-- switchres binary --"
+        if [ -x /usr/bin/switchres ]; then
+            echo "/usr/bin/switchres present"
+        else
+            echo "/usr/bin/switchres MISSING (CRT switching unavailable)"
+        fi
+    } > "$f"
+    say "  captured 00-environment.txt"
+}
+
+collect_kill_switches() {
+    local f="${OUT_DIR}/01-config-flags.txt"
+    {
+        echo "-- kill switch / force flags --"
+        for flag in \
+            "${CONFIGS_DIR}/fightcade-switchres.disable" \
+            "${CONFIGS_DIR}/fightcade-switchres.force" \
+            "${CONFIGS_DIR}/fightcade-pad-mouse.disable"; do
+            if [ -f "$flag" ]; then echo "PRESENT: $flag"; else echo "absent : $flag"; fi
+        done
+        echo
+        echo "-- pad-mouse.conf --"
+        cat "${CONFIGS_DIR}/fightcade-pad-mouse.conf" 2>/dev/null || echo "(no pad-mouse.conf)"
+        echo
+        echo "-- lobby-zoom.conf --"
+        cat "${CONFIGS_DIR}/fightcade-lobby-zoom.conf" 2>/dev/null || echo "(no lobby-zoom.conf)"
+    } > "$f"
+    say "  captured 01-config-flags.txt"
+}
+
+collect_tmp_state() {
+    local f="${OUT_DIR}/02-tmp-state.txt"
+    {
+        echo "-- runtime state / flag files (/tmp) --"
+        for s in \
+            /tmp/fightcade-switchres-wrap.state \
+            /tmp/fightcade-switchres-wrap.pause \
+            /tmp/fightcade-switchres-wrap.lock \
+            /tmp/fightcade-switchres-wrap.monitor.pid \
+            /tmp/fightcade-switchres-wrap.hotkey.pid \
+            /tmp/fightcade-fbneo-crt-active \
+            /tmp/fightcade-flycast-game-active \
+            /tmp/fightcade-crt-hostd.pid \
+            /tmp/fightcade-crt-hostd.lock \
+            /tmp/fightcade-pad-mouse.pid \
+            /tmp/fightcade-crt-block-pad-kbd.pid; do
+            if [ -e "$s" ]; then
+                printf '\n### %s\n' "$s"
+                cat "$s" 2>/dev/null
+            else
+                printf '(absent) %s\n' "$s"
+            fi
+        done
+        echo
+        echo "NOTE: pause=1 means Switchres is intentionally suspended (e.g. a menu is open)."
+        echo "      pause=1 with nothing on screen expecting it can indicate a stuck state."
+    } > "$f"
+    say "  captured 02-tmp-state.txt"
+}
+
+display_snapshot() {
+    # single line-ish snapshot of display state; used by snapshot and watch
+    local dm res cm out
+    dm=$(bres getDisplayMode)
+    res=$(bres currentResolution)
+    cm=$(bres currentMode)
+    out=$(bres currentOutput)
+    printf 'displayMode=%s currentResolution=%s currentMode=%s output=%s\n' \
+        "${dm:-?}" "${res:-?}" "${cm:-?}" "${out:-?}"
+}
+
+collect_display_full() {
+    local f="${OUT_DIR}/03-display.txt"
+    {
+        echo "-- batocera-resolution --"
+        display_snapshot
+        echo
+        echo "-- xrandr (full) --"
+        capped 5 xrandr 2>&1
+        echo
+        echo "-- SR-* switchres modes currently in X --"
+        capped 5 xrandr 2>/dev/null | awk '$1 ~ /^SR-/ {print}'
+        echo
+        echo "-- emulator window geometry (xdotool) --"
+        if command -v xdotool >/dev/null 2>&1; then
+            for pat in FBNeo Snes9x flycast; do
+                for wid in $(xdt search --name "$pat"); do
+                    name=$(xdt getwindowname "$wid")
+                    geo=$(xdt getwindowgeometry --shell "$wid" | tr '\n' ' ')
+                    printf '[%s] wid=%s name="%s" %s\n' "$pat" "$wid" "$name" "$geo"
+                done
+            done
+        else
+            echo "(xdotool not installed)"
+        fi
+    } > "$f"
+    say "  captured 03-display.txt"
+}
+
+collect_procs() {
+    local f="${OUT_DIR}/04-processes.txt"
+    {
+        echo "-- fightcade / switchres / emu processes --"
+        pgrep -fa 'fightcade|switchres|pad-mouse|fcadefbneo|fcadesnes9x|flycast|evtest|block-pad-kbd' 2>/dev/null \
+            || echo "(none)"
+    } > "$f"
+    say "  captured 04-processes.txt"
+}
+
+collect_diagnose() {
+    if [ -x "${PROJECT_DIR}/fightcade-diagnose" ]; then
+        capped 45 "${PROJECT_DIR}/fightcade-diagnose" > "${OUT_DIR}/05-diagnose.txt" 2>&1
+        say "  captured 05-diagnose.txt"
+    fi
+}
+
+collect_probe() {
+    # The probe prints its binding table immediately, then waits ~15s for button
+    # presses. Hard-cap it: it must never hang the collection. stdin from /dev/null
+    # so it never blocks waiting on a terminal.
+    if [ -x "${INPUT_DIR}/fightcade-pad-mouse" ]; then
+        capped 18 env FIGHTCADE_PAD_MOUSE_QUIET=1 "${INPUT_DIR}/fightcade-pad-mouse" probe \
+            > "${OUT_DIR}/06-padmouse-probe.txt" 2>&1 </dev/null
+        say "  captured 06-padmouse-probe.txt (press SELECT + WEST/NORTH during this step to confirm they register)"
+    fi
+}
+
+collect_emu_configs() {
+    copy_if "${FC_DATA}/config/fcadefbneo/fcadefbneo.ini" "emu-fcadefbneo.ini"
+    copy_if "${FC_DATA}/config/snes9x/fcadesnes9x.conf"   "emu-fcadesnes9x.conf"
+    copy_if "${FC_DATA}/config/flycast/emu.cfg"           "emu-flycast.cfg"
+    # backups left by the switchres wrapper (their presence hints at a crash mid-session)
+    for b in \
+        "${FC_DATA}/config/fcadefbneo/fcadefbneo.ini.bak.switchres" \
+        "${FC_DATA}/config/snes9x/fcadesnes9x.conf.bak.switchres" \
+        "${FC_DATA}/config/snes9x/fcadesnes9x.conf.bak.menu" \
+        "${FC_DATA}/config/snes9x/fcadesnes9x.conf.bak.hdmenu" \
+        "${FC_DATA}/config/flycast/emu.cfg.bak.switchres"; do
+        [ -f "$b" ] && { cp -f "$b" "${OUT_DIR}/$(basename "$b")" 2>/dev/null; \
+            say "  captured leftover backup $(basename "$b") (session may have crashed mid-game)"; }
+    done
+}
+
+collect_logs() {
+    copy_if "$SWITCHRES_LOG" "log-fightcade-crt-switchres.log"
+    copy_if "$INSTALL_LOG"   "log-fightcade-flatpak-install.log"
+    copy_if "$PADMOUSE_LOG"  "log-pad-mouse.log"
+    copy_if "$ZOOM_LOG"      "log-fightcade-lobby-zoom.log"
+    # es launch logs sometimes hold the fcade:// dispatch trail
+    copy_if "/userdata/system/logs/es_launch_stdout.log" "log-es_launch_stdout.log"
+    copy_if "/userdata/system/logs/es_launch_stderr.log" "log-es_launch_stderr.log"
+}
+
+run_watch() {
+    local tl="${OUT_DIR}/10-timeline-display.tsv"
+    local swlog_start padlog_start
+    hdr "WATCH mode: sampling for ${WATCH_SECS}s (Ctrl+C to stop early)"
+    say "Reproduce the issue now: launch the match and perform the steps that"
+    say "trigger the problem, then let this finish (or press Ctrl+C to stop early)."
+
+    # remember current log sizes so we can grab only the new tail for this session
+    swlog_start=$(wc -c < "$SWITCHRES_LOG" 2>/dev/null || echo 0)
+    padlog_start=$(wc -c < "$PADMOUSE_LOG" 2>/dev/null || echo 0)
+    echo "$swlog_start"  > "${OUT_DIR}/.swlog_start"
+    echo "$padlog_start" > "${OUT_DIR}/.padlog_start"
+
+    printf 'time\tdisplayMode\tcurrentResolution\tcurrentMode\tpauseFlag\tfbneoWinGeom\n' > "$tl"
+
+    local end=$((SECONDS + WATCH_SECS))
+    WATCH_STOP=0
+    trap 'WATCH_STOP=1' INT
+    while [ "$SECONDS" -lt "$end" ] && [ "$WATCH_STOP" -eq 0 ]; do
+        local now dm res cm pf geo wid
+        now=$(date '+%H:%M:%S')
+        dm=$(bres getDisplayMode)
+        res=$(bres currentResolution)
+        cm=$(bres currentMode)
+        pf=$(cat /tmp/fightcade-switchres-wrap.pause 2>/dev/null || echo -)
+        geo="-"
+        if command -v xdotool >/dev/null 2>&1; then
+            wid=$(xdt search --name FBNeo | head -1)
+            [ -z "$wid" ] && wid=$(xdt search --name Snes9x | head -1)
+            if [ -n "$wid" ]; then
+                geo=$(xdt getwindowgeometry --shell "$wid" \
+                    | awk -F= '/WIDTH/{w=$2} /HEIGHT/{h=$2} /^X=/{x=$2} /^Y=/{y=$2} END{printf "%sx%s+%s+%s", w,h,x,y}')
+            fi
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${dm:-?}" "${res:-?}" "${cm:-?}" "$pf" "$geo" >> "$tl"
+        sleep 1
+    done
+    trap - INT
+    say "  captured 10-timeline-display.tsv"
+
+    # grab only the tail written during this watch window
+    if [ -f "$SWITCHRES_LOG" ]; then
+        tail -c "+$((swlog_start + 1))" "$SWITCHRES_LOG" 2>/dev/null \
+            > "${OUT_DIR}/11-switchres-log-session.txt"
+        say "  captured 11-switchres-log-session.txt (this session only)"
+    fi
+    if [ -f "$PADMOUSE_LOG" ]; then
+        tail -c "+$((padlog_start + 1))" "$PADMOUSE_LOG" 2>/dev/null \
+            > "${OUT_DIR}/12-pad-mouse-log-session.txt"
+        say "  captured 12-pad-mouse-log-session.txt (this session only)"
+    fi
+    rm -f "${OUT_DIR}/.swlog_start" "${OUT_DIR}/.padlog_start"
+}
+
+# --------------------------------------------------------------------------
+
+say "Fightcade CRT log collector"
+say "output workspace: ${OUT_DIR}"
+mkdir -p "$LOGS_DIR"
+
+hdr "Environment"
+collect_environment
+hdr "Config flags"
+collect_kill_switches
+hdr "Runtime state"
+collect_tmp_state
+hdr "Display"
+collect_display_full
+hdr "Processes"
+collect_procs
+if [ "$AUTO" -eq 0 ]; then
+    hdr "Diagnose report"
+    collect_diagnose
+    hdr "Pad-mouse probe"
+    collect_probe
+fi
+hdr "Emulator configs"
+collect_emu_configs
+hdr "Logs"
+collect_logs
+
+if [ "$WATCH" -eq 1 ]; then
+    run_watch
+    # refresh display/state/proc snapshot AFTER the watch so we capture the end state
+    hdr "Post-watch snapshot"
+    display_snapshot > "${OUT_DIR}/13-display-after.txt"
+    collect_tmp_state
+fi
+
+hdr "Writing single report"
+# The full report is kept intact (great as a drag-drop attachment). For the
+# "paste it in Discord" case, this grep pulls only the high-signal lines: every
+# verbose [dbg] line (switchres lifecycle + pad-mouse menu decisions) plus the
+# SELECT+ combo lines. Keep it in sync with the dbg()/dlog() helpers.
+PASTE_GREP="grep -nE '\\[dbg\\]|SELECT\\+'"
+
+# Concatenate every collected section (all plain text) into one readable .txt.
+# Files are numbered/prefixed so a plain sort gives a sensible order.
+{
+    printf '############################################################\n'
+    printf '# Fightcade debug report\n'
+    printf '# generated: %s\n' "$(date '+%F %T %z')"
+    printf '# host: %s\n' "$(hostname 2>/dev/null)"
+    printf '#\n'
+    printf '# General Fightcade + display state capture for debugging (logs, config,\n'
+    printf '# display, processes). It does not assume any specific issue; it reflects\n'
+    printf '# whatever happened during this session.\n'
+    printf '#\n'
+    printf '# TL;DR for pasting just the key lines into Discord/GitHub, run:\n'
+    printf '#   %s %s\n' "$PASTE_GREP" "$REPORT"
+    printf '############################################################\n'
+    for f in $(ls -1 "$OUT_DIR" 2>/dev/null | sort); do
+        printf '\n\n===== %s =====\n' "$f"
+        cat "${OUT_DIR}/${f}" 2>/dev/null
+    done
+    printf '\n===== end of report =====\n'
+} > "$REPORT"
+rm -rf "$OUT_DIR"
+
+printf '\n'
+printf '============================================================\n'
+printf ' Collection complete. ONE file, plain text:\n'
+printf '   %s\n' "$REPORT"
+printf '\n'
+printf ' Send it back any of these ways:\n'
+printf '   - drag the file into a GitHub issue or Discord message\n'
+printf '   - paste the whole thing:   cat %s\n' "$REPORT"
+printf '   - paste ONLY the key lines: %s %s\n' "$PASTE_GREP" "$REPORT"
+printf '============================================================\n'

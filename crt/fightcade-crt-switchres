@@ -18,6 +18,28 @@ FLYCAST_GAME_FLAG="/tmp/fightcade-flycast-game-active"
 MONITOR_PIDFILE="/tmp/fightcade-switchres-wrap.monitor.pid"
 LOG_FILE="/userdata/system/logs/fightcade-crt-switchres.log"
 
+# Verbose logging is opt-in per game via the "FIGHTCADE DEBUG LOGGING" toggle;
+# fightcade-game-hook sets this flag at gameStart when the toggle is ON.
+FC_DEBUG_FLAG="/tmp/fightcade-debug.on"
+LOG_MAX_BYTES=1048576
+
+fc_debug_on() { [ -f "$FC_DEBUG_FLAG" ]; }
+
+# Extra detail, only when debugging. Normal (always-on) lines still use printf.
+dbg() {
+    fc_debug_on || return 0
+    printf '%s [dbg] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"
+}
+
+# Keep the log from growing without bound across many sessions: one rotation.
+rotate_log() {
+    local sz
+    [ -f "$LOG_FILE" ] || return 0
+    sz=$(wc -c < "$LOG_FILE" 2>/dev/null) || return 0
+    case "$sz" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$sz" -gt "$LOG_MAX_BYTES" ] && mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+}
+
 W=""; H=""; R=""
 
 fightcade_pick_display() {
@@ -1257,12 +1279,14 @@ fightcade_pre_play() {
     restore_all_configs
 
     if ! fightcade_should_use_switchres; then
+        dbg "pre_play: switchres NOT used (HD/disabled/non-xorg/>=1024w); running HD baseline"
         fightcade_apply_hd_video_baseline
         fightcade_save_session_state "" "" "" "" "" 0
         return 0
     fi
 
     if ! fightcade_parse_play_url "$URL"; then
+        dbg "pre_play: URL not a play url: $URL"
         fightcade_save_session_state "" "" "" "" "" 0
         return 0
     fi
@@ -1270,9 +1294,11 @@ fightcade_pre_play() {
     rom="$ROM_PARSED"
 
     if ! resolve_rom_dims "$emu" "$rom"; then
+        dbg "pre_play: could not resolve dims for emu=$emu rom=$rom; no switchres session"
         fightcade_save_session_state "$emu" "$rom" "" "" "" 0
         return 0
     fi
+    dbg "pre_play: emu=$emu rom=$rom dims=${W}x${H}@${R}"
 
     ini=$(ini_path_for_emu "$emu")
     [ "$emu" = "snes9x" ] && snes9x_conf=$(snes9x_conf_path)
@@ -1296,6 +1322,8 @@ fightcade_dispatch() {
 
     export DISPLAY=$(fightcade_pick_display)
     mkdir -p "$(dirname "$LOG_FILE")"
+    rotate_log
+    dbg "dispatch begin emu=$EMU_PARSED rom=$ROM_PARSED display=$DISPLAY"
 
     if fightcade_same_play_session_active "$EMU_PARSED" "$ROM_PARSED"; then
         local sw sh
@@ -1393,10 +1421,12 @@ fightcade_monitor_play() {
     done
 
     if [ "$emu_found" -eq 0 ]; then
+        dbg "monitor: emu '$emu' never appeared within 15s; cleaning up"
         session_cleanup
         trap - EXIT INT TERM HUP
         return 0
     fi
+    dbg "monitor: emu '$emu' up; switchres_emu=$(crt_switchres_emu "$emu" && echo yes || echo no) wine_menu=$(crt_wine_menu_emu "$emu" && echo yes || echo no)"
 
     if crt_wine_menu_emu "$emu"; then
         touch "$FBNEO_ACTIVE_FLAG"
@@ -1411,15 +1441,18 @@ fightcade_monitor_play() {
     if crt_switchres_emu "$emu"; then
         fightcade_prep_x_before_switchres
 
+        dbg "monitor: applying switchres ${W}x${H}@${R} for $emu"
         fightcade_drop_stale_switchres_modes
         /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
         fightcade_reassert_switchres_output "$W" "$H"
         sleep 4
         fightcade_reassert_switchres_output "$W" "$H"
         fightcade_fbneo_recover_fullscreen "$emu" "$ini" || true
+        dbg "monitor: switchres settled; output now $(batocera-resolution currentResolution 2>/dev/null)"
     fi
 
     if crt_wine_menu_emu "$emu" && command -v evtest >/dev/null 2>&1; then
+        dbg "monitor: starting keyboard hotkey watch (ESC pause / Alt+Del resume) for $emu"
         start_crt_hotkey_watch "${PRE_MODE:-}" "${PRE_RES:-}" "$W" "$H" "$R" "$emu" "$ini" "$snes9x_conf"
     fi
 
@@ -1459,10 +1492,14 @@ fightcade_monitor_play() {
             if [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ]; then
                 continue
             fi
-            emu_has_visible_window_for "$emu" || break
+            if ! emu_has_visible_window_for "$emu"; then
+                dbg "monitor: $emu window gone (not paused); ending session"
+                break
+            fi
         fi
         sleep 0.4
     done
+    dbg "monitor: emu '$emu' loop exited (running=$(emu_running_for "$emu" && echo yes || echo no)); restoring display"
     sleep 0.45
 
     session_cleanup
@@ -1489,6 +1526,7 @@ fightcade_emergency_recover() {
 fightcade_crt_esc_pause() {
     local emu=""
 
+    dbg "crt-pause requested (paused=$(crt_is_paused && echo 1 || echo 0))"
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
         . "$STATEFILE"
@@ -1536,6 +1574,7 @@ fightcade_crt_esc_pause() {
 fightcade_crt_resume() {
     local emu=""
 
+    dbg "crt-resume requested (paused=$(crt_is_paused && echo 1 || echo 0))"
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
         . "$STATEFILE"

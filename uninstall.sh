@@ -13,6 +13,7 @@
 #   - EmulationStation launcher entry, artwork, and gamelist node
 #   - Fightcade logs and configs
 #   - Orphaned flatpak runtimes (only when no other flatpak app remains)
+#   - Restarts EmulationStation so the removed entry + DEBUG toggle disappear
 #
 # Your ROM files under /userdata/roms/* and /userdata/bios are NEVER touched.
 
@@ -345,10 +346,23 @@ XML
     ok "Cleaned Fightcade entry from ${FLATPAK_ROMS}/gamelist.xml"
 fi
 
-# Fightcade logs and configs.
+# Fightcade logs, collected debug reports, and configs.
 rm -f "${LOGS_DIR}"/fightcade-*.log \
+      "${LOGS_DIR}"/fightcade-debug-*.txt \
+      "${LOGS_DIR}"/fightcade-collect-*.tar.gz \
       "${CONFIGS_DIR}"/fightcade-*.conf
 ok "Removed Fightcade logs and configs"
+
+# Additive ES feature file (the Debug Logging toggle). Removing it drops the
+# toggle from Advanced Game Options on the next ES restart.
+rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg"
+ok "Removed ES Debug toggle feature file"
+
+# CLI tool symlinks in /usr/bin.
+for tool in fightcade-pad-mouse fightcade-cursor fightcade-lobby-zoom \
+            fightcade-diagnose fightcade-collect-logs; do
+    [ -L "/usr/bin/${tool}" ] && rm -f "/usr/bin/${tool}"
+done
 
 # Remove orphaned flatpak runtimes (Wine + Freedesktop pulled in for Fightcade),
 # but only when no other flatpak app remains, so we never break another app.
@@ -386,3 +400,19 @@ info ""
 info "You can reinstall anytime with:"
 info "  curl -fsSL https://raw.githubusercontent.com/net-terminal-gene/batocera-fightcade-flatpak/main/install.sh | bash -s -- -y"
 info ""
+
+# ---------------------------------------------------------------------------
+# 9. Restart EmulationStation last, after all output above has printed.
+#    ES only reads gamelist.xml and es_features_*.cfg at startup, so the removed
+#    Fightcade launcher entry and the DEBUG LOGGING toggle would otherwise linger
+#    in the running UI until the next restart. killall -9 is the reliable path on
+#    Batocera: the init supervisor immediately respawns ES clean. Guard on ES
+#    actually running so uninstalling from a pure SSH session does not error.
+# ---------------------------------------------------------------------------
+if pgrep -f emulationstation >/dev/null 2>&1; then
+    notice "Restarting EmulationStation to drop the Fightcade entry and DEBUG toggle..."
+    killall -9 emulationstation 2>/dev/null || true
+    ok "EmulationStation restarted"
+else
+    notice "EmulationStation is not running; changes apply on next ES start"
+fi

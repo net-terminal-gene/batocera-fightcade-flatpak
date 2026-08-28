@@ -132,6 +132,20 @@ def log(msg: str) -> None:
         pass
 
 
+# Verbose logging is opt-in per game via the "FIGHTCADE DEBUG LOGGING" toggle;
+# fightcade-game-hook sets this flag at gameStart when the toggle is ON.
+DEBUG_FLAG = "/tmp/fightcade-debug.on"
+
+
+def debug_on() -> bool:
+    return os.path.exists(DEBUG_FLAG)
+
+
+def dlog(msg: str) -> None:
+    if debug_on():
+        log(f"[dbg] {msg}")
+
+
 def load_conf() -> dict:
     cfg = dict(DEFAULTS)
     if not os.path.isfile(CONF):
@@ -2322,6 +2336,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and now - last_pause_at >= combo_cooldown
             ):
                 session.refresh(display, force=True)
+                dlog(
+                    "SELECT+WEST edge: "
+                    f"snes={fightcade_snes9x_running()} "
+                    f"fbneo_avail={session.fbneo_combo_available()} "
+                    f"switchres={crt_switchres_active()} "
+                    f"crt_paused={crt_paused()} sess_paused={session.crt_paused} "
+                    f"menu_open={emu_menu_open}"
+                )
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
                     if hd_snes:
@@ -2367,6 +2389,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 and now - last_resume_at >= combo_cooldown
             ):
                 session.refresh(display, force=True)
+                dlog(
+                    "SELECT+NORTH edge: "
+                    f"snes={fightcade_snes9x_running()} "
+                    f"fbneo_avail={session.fbneo_combo_available()} "
+                    f"switchres={crt_switchres_active()} "
+                    f"crt_paused={crt_paused()} sess_paused={session.crt_paused} "
+                    f"menu_open={emu_menu_open}"
+                )
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
                     if hd_snes:

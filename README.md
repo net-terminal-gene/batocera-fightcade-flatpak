@@ -183,9 +183,12 @@ Most issues while navigating with a gamepad have a quick fix:
 | **FBNeo settings not saving** | HD-only: all settings persist normally after install. CRT: per-game settings persist; global video settings reset after games (Switchres restoration). See [docs/HD.md — Settings persistence](docs/HD.md#settings-persistence) or [docs/CRT.md — Settings persistence](docs/CRT.md#settings-persistence). |
 | **Control Center keeps opening mid-game** | That's Batocera's **Hotkey + EAST** global combo. See [docs/CONTROLS.md — Batocera hotkeys](docs/CONTROLS.md#batocera-hotkeys-select). |
 | **Lobby looks cropped / oversized on CRT** | Fightcade's Video Mode must resolve to **640×480**. See [docs/CRT.md](docs/CRT.md#crt--switchres-support). |
-| **Something looks broken after install** | Run `/userdata/system/fightcade-flatpak/fightcade-diagnose` and re-run the installer (it's safe). |
+| **Install seems incomplete or broken** | Run `/userdata/system/fightcade-flatpak/fightcade-diagnose` to check install integrity, then re-run the installer (it's safe). |
+| **Reporting a bug (menu, Switchres, crashes)** | Turn on **DEBUG LOGGING**, reproduce, then share the single report file it writes. See [docs/DEBUGGING.md](docs/DEBUGGING.md). |
 
 Full gamepad layout and per-mode details: [docs/CONTROLS.md](docs/CONTROLS.md).
+
+Collecting logs for a bug report (HD or CRT): [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
 ## Added features
 
@@ -195,5 +198,6 @@ Full gamepad layout and per-mode details: [docs/CONTROLS.md](docs/CONTROLS.md).
 | Lobby chat config (`fightcade-lobby-chat.conf`) | [docs/LOBBY-CHAT.md](docs/LOBBY-CHAT.md) |
 | HD fullscreen / aspect / vsync | [docs/HD.md](docs/HD.md) |
 | CRT / Switchres / native modelines | [docs/CRT.md](docs/CRT.md) |
+| Debugging & bug reports (logs) | [docs/DEBUGGING.md](docs/DEBUGGING.md) |
 
 License: [CC0 1.0](LICENSE)

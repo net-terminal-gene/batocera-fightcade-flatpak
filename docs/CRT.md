@@ -41,6 +41,7 @@ resolution and refresh rate, then restores menu timing when the session ends.
 - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
 - [Switchres flags](#switchres-flags)
 - [Recovery](#recovery)
+- [Debugging Switchres issues](#debugging-switchres-issues)
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
 
 ## Fightcade resolution
@@ -117,6 +118,15 @@ present.
 |---------|--------------|
 | `/userdata/system/fightcade-flatpak/crt/fightcade-crt-recover` | Restore lobby timing and clear stale game sessions |
 | `/userdata/system/fightcade-flatpak/fightcade-diagnose` | Print install state and CRT flags |
+
+## Debugging Switchres issues
+
+If Switchres switches off mid-game, never applies, or the in-game menu will not
+appear, turn on **DEBUG LOGGING**, reproduce it, and send the single report file.
+It captures the full Switchres lifecycle (`dispatch begin` → `pre_play` →
+`applying switchres` → `settled` → `crt-pause` / `crt-resume` →
+`loop exited; restoring display`) and the pad-mouse menu decisions. Full steps:
+[Debugging & bug reports](DEBUGGING.md).
 
 ## After a Fightcade Flatpak update
 

@@ -77,4 +77,10 @@ Or re-run the full installer; it is safe on an existing install.
 > together with another button) can be misread afterward. Quit to the lobby
 > (**SELECT + Start**) and relaunch the game so it starts in a clean state.
 
+## Reporting a problem
+
+Hit a bug on HD (menu not appearing, cursor/window trouble, a crash)? Turn on
+**DEBUG LOGGING**, reproduce it, and send the single report file. Full steps:
+[Debugging & bug reports](DEBUGGING.md).
+
 [← Back to main README](../README.md)

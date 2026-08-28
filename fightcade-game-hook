@@ -16,6 +16,19 @@ CRT_HOSTD="${PROJECT_DIR}/crt/fightcade-crt-hostd"
 CRT_RECOVER="${PROJECT_DIR}/crt/fightcade-crt-recover"
 PAD_MOUSE="${PROJECT_DIR}/input/fightcade-pad-mouse"
 LOBBY_ZOOM="${PROJECT_DIR}/fightcade-lobby-zoom"
+COLLECT_LOGS="${PROJECT_DIR}/fightcade-collect-logs"
+LOG_DIR="/userdata/system/logs"
+
+# Runtime flag the switchres wrapper and pad-mouse check for verbose logging.
+# Set from the per-game "FIGHTCADE DEBUG LOGGING" toggle (Advanced Game Options),
+# which writes flatpak["Fightcade.flatpak"].fcdebug = 1 (ON) or empty (OFF).
+FC_DEBUG_FLAG="/tmp/fightcade-debug.on"
+
+fightcade_debug_enabled() {
+    local v
+    v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcdebug' 2>/dev/null | tr -d '[:space:]')
+    [ "$v" = "1" ]
+}
 
 [ "$SYSTEM" = "flatpak" ] || exit 0
 
@@ -32,14 +45,37 @@ else
 fi
 
 if [ "$EVENT" = "gameStop" ]; then
+    # When debug logging was on this session, auto-write ONE plain-text report to
+    # /userdata/system/logs/fightcade-debug-*.txt so a non-terminal user can grab it
+    # straight off the Samba share (\\HOST\share\system\logs) and drag it into a
+    # GitHub issue or Discord. Kicked off before teardown, backgrounded, so returning
+    # to the lobby is not delayed. The transient /tmp/pad-mouse.log still exists here
+    # and gets folded into the report.
+    if [ -f "$FC_DEBUG_FLAG" ]; then
+        mkdir -p "$LOG_DIR"
+        if [ -x "$COLLECT_LOGS" ]; then
+            setsid "$COLLECT_LOGS" --auto >/tmp/fightcade-collect.log 2>&1 </dev/null &
+        else
+            [ -f /tmp/pad-mouse.log ] && cp -f /tmp/pad-mouse.log "$LOG_DIR/fightcade-pad-mouse.log" 2>/dev/null || true
+        fi
+    fi
     [ -x "$LOBBY_ZOOM" ] && "$LOBBY_ZOOM" save >>/tmp/fightcade-lobby-zoom.log 2>&1 || true
     [ -x "$PAD_MOUSE" ] && "$PAD_MOUSE" stop
     [ -x "$CRT_HOSTD" ] && "$CRT_HOSTD" stop
     [ -x "$CRT_RECOVER" ] && "$CRT_RECOVER"
+    rm -f "$FC_DEBUG_FLAG"
     exit 0
 fi
 
 # --- gameStart ---
+
+# Set the debug flag before pad-mouse and the CRT host watcher start, so both pick
+# up verbose logging for this session. Cleared here when the toggle is off.
+if fightcade_debug_enabled; then
+    : > "$FC_DEBUG_FLAG"
+else
+    rm -f "$FC_DEBUG_FLAG"
+fi
 
 # Runs before Fightcade launches, so Chromium reads the mode-correct lobby zoom
 # from Preferences at startup. Must stay synchronous (not backgrounded).

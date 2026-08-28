@@ -15,7 +15,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg fightcade-diagnose uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -294,6 +294,7 @@ link_cli_tools() {
   ln -sf "${pd}/input/fightcade-cursor" /usr/bin/fightcade-cursor
   ln -sf "${pd}/fightcade-lobby-zoom" /usr/bin/fightcade-lobby-zoom
   ln -sf "${pd}/fightcade-diagnose" /usr/bin/fightcade-diagnose
+  ln -sf "${pd}/fightcade-collect-logs" /usr/bin/fightcade-collect-logs
 }
 
 install_chat_config() {
@@ -324,6 +325,41 @@ install_pad_mouse_config() {
   else
     ok "Fightcade pad-mouse config: ${dst} (unchanged)"
   fi
+}
+
+ES_FEATURES_CHANGED=0
+install_es_features() {
+  # Batocera merges es_features_*.cfg from this dir with the system es_features.cfg
+  # at EmulationStation startup. Dropping our additive file here adds the per-game
+  # "Debug Logging" toggle to the flatpak emulator's Advanced Game Options without
+  # touching the read-only /usr/share copy. ES only reads it at startup, so a change
+  # here means ES must be restarted for the toggle to appear/update.
+  local src="${PROJECT_DIR}/emulationstation/es_features_fightcade.cfg"
+  local dir="/userdata/system/configs/emulationstation"
+  local dst="${dir}/es_features_fightcade.cfg"
+  [ -f "${src}" ] || { warn "es_features_fightcade.cfg missing; Debug toggle will not appear"; return 0; }
+  mkdir -p "${dir}"
+  if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
+    ok "ES Debug toggle feature: ${dst} (unchanged)"
+  else
+    install -m 0644 "${src}" "${dst}"
+    ES_FEATURES_CHANGED=1
+    ok "ES Debug toggle feature installed at ${dst}"
+  fi
+}
+
+restart_emulationstation() {
+  # killall -9 is the reliable path on Batocera: the init supervisor immediately
+  # respawns ES clean. Only fire when ES is actually running so installing from a
+  # pure SSH session (no ES up) does not error, and only when the feature file
+  # changed so re-running the installer does not needlessly yank the user home.
+  if ! pgrep -f emulationstation >/dev/null 2>&1; then
+    notice "EmulationStation is not running; the Debug toggle appears on next ES start"
+    return 0
+  fi
+  notice "Restarting EmulationStation to enable the Debug toggle..."
+  killall -9 emulationstation 2>/dev/null || true
+  ok "EmulationStation restarted"
 }
 
 stop_legacy_crt_watch() {
@@ -517,6 +553,7 @@ record_install_branch
 link_cli_tools "${PROJECT_DIR}"
 install_chat_config
 install_pad_mouse_config
+install_es_features
 ok "Scripts installed to ${PROJECT_DIR}"
 
 # Install game hook into Batocera user scripts directory
@@ -575,5 +612,13 @@ info "Recovery after a stuck display:"
 info "  ${PROJECT_DIR}/crt/fightcade-crt-recover"
 info ""
 info "To check install state: ${PROJECT_DIR}/fightcade-diagnose"
+info "To collect debug logs:  ${PROJECT_DIR}/fightcade-collect-logs        (snapshot)"
+info "                        ${PROJECT_DIR}/fightcade-collect-logs --watch 300  (before reproducing)"
 info "To remove:              ${PROJECT_DIR}/uninstall.sh"
 info ""
+
+# Last step: only restart ES when the feature file changed, so the Debug toggle
+# is live immediately without needlessly interrupting re-runs.
+if [ "${ES_FEATURES_CHANGED}" -eq 1 ]; then
+    restart_emulationstation
+fi
