@@ -1,7 +1,5 @@
 <p align="center">
-  <img src="images/batocera-logo.png" alt="Batocera" width="180">
-  &nbsp;&nbsp;&nbsp;
-  <img src="images/Fightcade.png" alt="Fightcade" width="180">
+  <img src="images/batocera-fightcade-logo.png" alt="Batocera Fightcade" width="600">
 </p>
 
 <h1 align="center">Fightcade Flatpak for Batocera</h1>
