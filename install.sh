@@ -435,6 +435,57 @@ apply_overrides() {
     else
         warn "Could not apply vblank_mode override; SNES may tear on CRT"
     fi
+
+    # Keep SDL inside the Flatpak on its evdev/js backend instead of its HIDAPI
+    # drivers. If SDL's HIDAPI grabs the Steam Deck pad's raw HID, the kernel
+    # hid-steam driver drops the /dev/input/jsN node that fightcade-pad-mouse needs,
+    # which kills the in-game combos (SELECT+START to exit, SELECT+WEST for the
+    # emulator menu). Pairs with the winebus SDL backend set in apply_wine_input_backend.
+    local var
+    for var in SDL_JOYSTICK_HIDAPI=0 SDL_JOYSTICK_HIDAPI_STEAM=0; do
+        if flatpak override --system --env="${var}" "${APP_ID}" 2>/dev/null; then
+            ok "Controller env override applied (${var})"
+        else
+            warn "Could not apply env override ${var}; in-game combos may fail on Steam Deck"
+        fi
+    done
+}
+
+apply_wine_input_backend() {
+    # Route Fightcade's Wine emulators through SDL/evdev instead of raw hidraw.
+    # By default winebus opens /dev/hidrawN directly for the Steam Deck pad, which
+    # makes hid-steam remove the /dev/input/jsN node fightcade-pad-mouse relies on for
+    # in-game combos. DisableHidraw=1 + Enable SDL=1 is Proton's default and keeps the
+    # joystick node alive. Idempotent: wine reg add overwrites the value in place.
+    #
+    # The prefix lives inside the Flatpak sandbox at /var/data/wineprefixes/<wine-ver>/
+    # and is only created on Fightcade's first launch, so on a brand-new install (pad
+    # never launched) there is nothing to edit yet; the env overrides above still apply
+    # and re-running this installer after the first launch sets the reg keys.
+    notice "Configuring Wine controller backend (SDL/evdev, no hidraw grab)..."
+    local out
+    out=$(flatpak run --command=sh "${APP_ID}" -c '
+        prefix=""
+        for d in /var/data/wineprefixes/*/; do
+            [ -f "${d}system.reg" ] && prefix="${d%/}"
+        done
+        if [ -z "$prefix" ]; then
+            echo "NO_PREFIX"
+            exit 0
+        fi
+        export WINEPREFIX="$prefix"
+        wine reg add "HKLM\\System\\CurrentControlSet\\Services\\winebus" /v DisableHidraw /t REG_DWORD /d 1 /f >/dev/null 2>&1
+        wine reg add "HKLM\\System\\CurrentControlSet\\Services\\winebus" /v "Enable SDL" /t REG_DWORD /d 1 /f >/dev/null 2>&1
+        echo "APPLIED $prefix"
+    ' 2>/dev/null || true)
+    case "${out}" in
+        APPLIED*)
+            ok "Wine controller backend set (winebus: DisableHidraw=1, Enable SDL=1)" ;;
+        NO_PREFIX*)
+            warn "Wine prefix not created yet; launch Fightcade once, then re-run this installer to finish the controller fix" ;;
+        *)
+            warn "Could not set Wine controller backend; in-game combos may fail on Steam Deck" ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -585,6 +636,10 @@ ok "Game hook installed to ${SCRIPTS_DIR}/fightcade-game-hook"
 
 # Apply Flatpak filesystem overrides
 apply_overrides
+
+# Route the Wine emulators' controller reads through SDL/evdev (keeps the Steam
+# Deck joystick node alive for in-game combos). Runs after the Flatpak is present.
+apply_wine_input_backend
 
 # Patch Flatpak xdg-open (fcade:// intercept; re-applied after Flatpak updates)
 patch_flatpak_xdg_open
