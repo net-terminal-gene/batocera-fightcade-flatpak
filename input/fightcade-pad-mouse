@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import glob
 import os
@@ -59,6 +60,13 @@ SNES9X_PGREP_RE = r"fcadesnes9x\.exe"
 
 EV_KEY = 0x01
 EV_ABS = 0x03
+# Highest gamepad button code we reconcile against the kernel bitmap (covers all
+# BTN_* incl. BTN_DPAD_* at 0x220-0x223). Keyboard keys (<0x100) are left alone.
+KEY_SYNC_MIN = 0x100
+KEY_SYNC_MAX = 0x2FF
+_KEY_SYNC_BYTES = (KEY_SYNC_MAX >> 3) + 1
+# EVIOCGKEY(len) == _IOR('E', 0x18, len): read the absolute pressed-key bitmap.
+_EVIOCGKEY = (2 << 30) | (_KEY_SYNC_BYTES << 16) | (ord("E") << 8) | 0x18
 ABS_X = 0x00
 ABS_Y = 0x01
 ABS_HAT0X = 0x10
@@ -72,6 +80,12 @@ BTN_TR = 0x137
 BTN_TR2 = 0x139
 BTN_SELECT = 0x13A
 BTN_START = 0x13B
+# Some pads (Steam Deck, many arcade encoders) report the D-pad as these buttons
+# instead of the ABS_HAT0X/Y axes, so the stick-only cursor path never sees them.
+BTN_DPAD_UP = 0x220
+BTN_DPAD_DOWN = 0x221
+BTN_DPAD_LEFT = 0x222
+BTN_DPAD_RIGHT = 0x223
 
 # ABS axes that are sticks or hats — not analog triggers.
 STICK_ABS = frozenset({ABS_X, ABS_Y, 2, 3, 4, ABS_HAT0X, ABS_HAT0Y})
@@ -1233,6 +1247,10 @@ class PadBindings:
     abs_y: int = ABS_Y
     abs_hat_x: int = ABS_HAT0X
     abs_hat_y: int = ABS_HAT0Y
+    btn_dpad_up: int = BTN_DPAD_UP
+    btn_dpad_down: int = BTN_DPAD_DOWN
+    btn_dpad_left: int = BTN_DPAD_LEFT
+    btn_dpad_right: int = BTN_DPAD_RIGHT
     source: str = "unconfigured"
     es_device: str = ""
     es_guid: str = ""
@@ -1268,6 +1286,13 @@ class PadBindings:
         }
         if self.btn_hotkey >= 0 and self.btn_hotkey not in names:
             names[self.btn_hotkey] = "HOTKEY (select chord)"
+        for code, label in (
+            (self.btn_dpad_up, "DPAD_UP → cursor up (button d-pad)"),
+            (self.btn_dpad_down, "DPAD_DOWN → cursor down (button d-pad)"),
+            (self.btn_dpad_left, "DPAD_LEFT → cursor left (button d-pad)"),
+            (self.btn_dpad_right, "DPAD_RIGHT → cursor right (button d-pad)"),
+        ):
+            names.setdefault(code, label)
         for code, is_axis in self._r2_sources_list():
             if is_axis:
                 continue
@@ -1590,6 +1615,16 @@ def bindings_from_es_inputs(
         b.abs_x = inputs["joystick1left"]
     if "joystick1up" in inputs:
         b.abs_y = inputs["joystick1up"]
+    # D-pad reported as buttons (Steam Deck, arcade encoders): use the exact codes
+    # ES bound. Hat-type d-pads keep the ABS_HAT0X/Y defaults handled elsewhere.
+    for slot, attr in (
+        ("up", "btn_dpad_up"),
+        ("down", "btn_dpad_down"),
+        ("left", "btn_dpad_left"),
+        ("right", "btn_dpad_right"),
+    ):
+        if slot in inputs and input_types.get(slot) == "button":
+            setattr(b, attr, inputs[slot])
     return b
 
 
@@ -2027,6 +2062,33 @@ def drain_evdev(
     return moved
 
 
+def resync_keys_from_hw(fd: int, keys: dict[int, int]) -> None:
+    """Reconcile key_state with the kernel's actual pressed-key bitmap.
+
+    evdev reports buttons as press/release edges. If pad-mouse's read buffer
+    overflows (it blocks in subprocesses during a combo, e.g. SELECT+WEST menu
+    pause), the kernel drops events and only raises SYN_DROPPED; a missed release
+    then latches a button "held" for the rest of the session. That silently kept
+    btn_combo_west down on the Steam Deck, which disabled R2 cursor slow-down
+    (WEST is in the r2_slow_nudge exclusion set) and re-fired the menu combo.
+    Re-reading EVIOCGKEY after each drain self-heals any such drift.
+    """
+    buf = bytearray(_KEY_SYNC_BYTES)
+    try:
+        fcntl.ioctl(fd, _EVIOCGKEY, buf, True)
+    except OSError:
+        return
+    for code in range(KEY_SYNC_MIN, KEY_SYNC_MAX + 1):
+        byte = code >> 3
+        if byte >= len(buf):
+            break
+        actual = 1 if (buf[byte] >> (code & 7)) & 1 else 0
+        if actual:
+            keys[code] = 1
+        elif keys.get(code, 0):
+            keys[code] = 0
+
+
 def key_down(keys: dict[int, int], code: int) -> bool:
     return keys.get(code, 0) == 1
 
@@ -2040,6 +2102,48 @@ def pick_active_pad(
     if not activity:
         return pads[0][1]
     return max(activity, key=activity.get)
+
+
+def pad_has_meaningful_input(
+    bind: PadBindings,
+    keys: dict[int, int],
+    axes: dict[int, int],
+    caps: dict[int, tuple[int, int, int]],
+    deadzone: int,
+    deadzone_8bit: int,
+) -> bool:
+    """True only when a pad shows real user input, not idle jitter.
+
+    Chooses the active pad when several controllers are connected. The Steam Deck's
+    built-in sticks/trackpads emit a constant stream of tiny sub-deadzone axis
+    changes; treating any raw change as "activity" made the Deck permanently win
+    active-pad selection and starved external controllers (laggy/jumpy cursor).
+    Gating on beyond-deadzone stick/hat movement or a real button press fixes that
+    while leaving the single-pad case untouched (pick_active_pad short-circuits).
+    """
+    for ax in (bind.abs_x, bind.abs_y):
+        mn, mx, fl = caps.get(ax, (-32768, 32767, 0))
+        if abs(axis_to_float(axes.get(ax, 0), mn, mx, fl, deadzone, deadzone_8bit)) > 0.0:
+            return True
+    if axes.get(bind.abs_hat_x, 0) or axes.get(bind.abs_hat_y, 0):
+        return True
+    for code in (
+        bind.btn_left,
+        bind.btn_right,
+        bind.btn_combo_west,
+        bind.btn_combo_north,
+        bind.btn_select,
+        bind.btn_start,
+        bind.btn_r1,
+        bind.btn_hotkey,
+        bind.btn_dpad_up,
+        bind.btn_dpad_down,
+        bind.btn_dpad_left,
+        bind.btn_dpad_right,
+    ):
+        if code >= 0 and key_down(keys, code):
+            return True
+    return r2_active(bind, keys, axes, caps)
 
 
 def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
@@ -2094,19 +2198,43 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
 
     last_pointer_rescan = time.time()
 
-    try:
-        for label, event_path in pads:
-            bindings = resolve_pad_bindings(event_path, es_configs_by_guid, use_es_input)
-            bindings_by_pad[event_path] = bindings
-            log_pad_bindings(label, bindings)
-            keys_by_pad[event_path] = {}
-            event_fds[os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)] = event_path
-            axis_caps_by_pad[event_path] = load_pad_axis_caps(event_path, bindings)
-            axes_by_pad[event_path] = initial_axes(
-                event_path, axis_caps_by_pad[event_path], bindings
-            )
-    except OSError as exc:
-        log(f"open input device failed: {exc}")
+    def open_pad(event_path: str) -> int | None:
+        """Open (or reopen) a pad's evdev node and (re)initialise its state.
+
+        Returns the new fd, or None if the node cannot be opened right now. The
+        Steam Deck gamepad (hid-steam) periodically destroys and recreates its
+        input device under a new eventN; its by-id symlink follows the new node but
+        briefly dangles mid-re-enumeration. Callers may retry via pending_reopen.
+        """
+        try:
+            fd = os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as exc:
+            log(f"open input device failed {event_path}: {exc}")
+            return None
+        bindings = resolve_pad_bindings(event_path, es_configs_by_guid, use_es_input)
+        bindings_by_pad[event_path] = bindings
+        keys_by_pad[event_path] = {}
+        axis_caps_by_pad[event_path] = load_pad_axis_caps(event_path, bindings)
+        axes_by_pad[event_path] = initial_axes(
+            event_path, axis_caps_by_pad[event_path], bindings
+        )
+        event_fds[fd] = event_path
+        return fd
+
+    # event_path -> monotonic time of the next reopen attempt while a pad is gone.
+    pending_reopen: dict[str, float] = {}
+    reopen_backoff_sec = 0.5
+
+    opened_any = False
+    for label, event_path in pads:
+        fd = open_pad(event_path)
+        if fd is None:
+            pending_reopen[event_path] = time.monotonic() + reopen_backoff_sec
+            continue
+        opened_any = True
+        log_pad_bindings(label, bindings_by_pad[event_path])
+    if not opened_any and not pending_reopen:
+        log("open input device failed: no pads could be opened")
         return
 
     left_held = False
@@ -2191,16 +2319,82 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     set_cursor_visible(want_cursor, display)
                     cursor_visible = want_cursor
 
-            _r, _, _ = select.select(all_fds, [], [], poll_sec)
+            # Reopen any pad that disconnected (Steam Deck hid-steam re-enumeration).
+            if pending_reopen:
+                now_m = time.monotonic()
+                open_paths = set(event_fds.values())
+                for event_path, due in list(pending_reopen.items()):
+                    if now_m < due:
+                        continue
+                    if event_path in open_paths:
+                        pending_reopen.pop(event_path, None)
+                        continue
+                    fd = open_pad(event_path)
+                    if fd is None:
+                        pending_reopen[event_path] = now_m + reopen_backoff_sec
+                    else:
+                        pending_reopen.pop(event_path, None)
+                        log(f"reconnected pad {event_path} (fd {fd})")
+
+            all_fds = list(event_fds.keys())
+            try:
+                _r, _, _ = select.select(all_fds, [], [], poll_sec)
+            except OSError:
+                # A fd went stale between iterations; drop dead ones and reopen.
+                for fd in all_fds:
+                    try:
+                        os.fstat(fd)
+                    except OSError:
+                        dead_path = event_fds.pop(fd, None)
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                        if dead_path is not None:
+                            pending_reopen.setdefault(dead_path, time.monotonic())
+                time.sleep(poll_sec)
+                continue
             for fd in _r:
-                event_path = event_fds[fd]
+                event_path = event_fds.get(fd)
+                if event_path is None:
+                    continue
                 axes = axes_by_pad[event_path]
                 keys = keys_by_pad[event_path]
                 bindings = bindings_by_pad[event_path]
-                if drain_evdev(fd, axes, keys, bindings.tracked_abs):
+                try:
+                    drain_evdev(fd, axes, keys, bindings.tracked_abs)
+                    resync_keys_from_hw(fd, keys)
+                except OSError as exc:
+                    # ENODEV/ENXIO/EIO: the device re-enumerated (Steam Deck hid-steam
+                    # destroys and recreates its gamepad node every few minutes). Close
+                    # this fd and schedule a reopen of the same by-id path, which now
+                    # points at the new node. Without this, one re-enumeration crashed
+                    # the daemon and froze the lobby cursor for the whole session.
+                    if exc.errno in (errno.ENODEV, errno.ENXIO, errno.EIO, errno.EBADF):
+                        log(f"pad {event_path} disconnected ({exc}); scheduling reopen")
+                        event_fds.pop(fd, None)
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                        pending_reopen.setdefault(event_path, time.monotonic())
+                        continue
+                    raise
+                if pad_has_meaningful_input(
+                    bindings,
+                    keys,
+                    axes,
+                    axis_caps_by_pad[event_path],
+                    deadzone,
+                    deadzone_8bit,
+                ):
                     pad_activity[event_path] = time.time()
 
             active_path = pick_active_pad(pads, pad_activity)
+            if active_path not in keys_by_pad:
+                # All pads are mid-reconnect; nothing to process this tick.
+                time.sleep(poll_sec)
+                continue
             key_state = keys_by_pad[active_path]
             bind = bindings_by_pad[active_path]
 
@@ -2521,6 +2715,19 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 dy = int(round(ny * move_speed))
                 hx = hat_to_step(axes.get(bind.abs_hat_x, 0))
                 hy = hat_to_step(axes.get(bind.abs_hat_y, 0))
+                # D-pad reported as buttons (Steam Deck, arcade encoders). Inert for
+                # hat/analog-only pads: those never emit BTN_DPAD_* so these are all
+                # false and hx/hy stay whatever the hat axis produced.
+                if key_down(key_state, bind.btn_dpad_left):
+                    hx -= 1
+                if key_down(key_state, bind.btn_dpad_right):
+                    hx += 1
+                if key_down(key_state, bind.btn_dpad_up):
+                    hy -= 1
+                if key_down(key_state, bind.btn_dpad_down):
+                    hy += 1
+                hx = max(-1, min(1, hx))
+                hy = max(-1, min(1, hy))
                 step = int(round(move_speed))
                 if hx:
                     dx += hx * step
@@ -2538,7 +2745,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
         if right_held:
             set_mouse_button(False, xdotool, 3, right_click_window)
         xdotool.close()
-        for fd in all_fds:
+        for fd in list(event_fds.keys()):
             try:
                 os.close(fd)
             except OSError:
