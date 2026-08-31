@@ -1014,12 +1014,145 @@ class SessionState:
         return self.wine_menu_emu_combo_available()
 
 
+def is_wayland_session() -> bool:
+    """True when a Wayland compositor (labwc/wlroots) is running.
+
+    HD mode on Batocera is Wayland (labwc + Xwayland); CRT mode is pure X11.
+    wlroots blocks XTEST pointer warping for Xwayland clients, so xdotool
+    mousemove is a no-op there and we must inject via /dev/uinput instead.
+    Detect by the wayland socket (do not rely on resolution or mode name).
+    """
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    bases = []
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        bases.append(xdg)
+    bases += ["/var/run", "/run"]
+    seen: set[str] = set()
+    for base in bases:
+        if base in seen:
+            continue
+        seen.add(base)
+        try:
+            for name in os.listdir(base):
+                if name.startswith("wayland-") and not name.endswith(".lock"):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+class UinputMouse:
+    """Relative virtual pointer via /dev/uinput.
+
+    Works on both X11 and Wayland because it is a real kernel input device that
+    the compositor picks up through libinput hotplug, unlike XTEST pointer
+    warping (xdotool) which wlroots refuses to apply for Xwayland clients. Emits
+    relative motion, mouse buttons, and wheel. Buttons are sent through the same
+    device so a click lands wherever this pointer moved the cursor.
+    """
+
+    def __init__(self) -> None:
+        from evdev import UInput
+        from evdev import ecodes as ecodes_mod
+
+        self._e = ecodes_mod
+        cap = {
+            ecodes_mod.EV_REL: [
+                ecodes_mod.REL_X,
+                ecodes_mod.REL_Y,
+                ecodes_mod.REL_WHEEL,
+                ecodes_mod.REL_HWHEEL,
+            ],
+            ecodes_mod.EV_KEY: [
+                ecodes_mod.BTN_LEFT,
+                ecodes_mod.BTN_RIGHT,
+                ecodes_mod.BTN_MIDDLE,
+            ],
+        }
+        self._ui = UInput(cap, name="fightcade-pad-mouse", version=1)
+        self._btn = {
+            1: ecodes_mod.BTN_LEFT,
+            2: ecodes_mod.BTN_MIDDLE,
+            3: ecodes_mod.BTN_RIGHT,
+        }
+        # Give libinput/the compositor a moment to hotplug-detect the new
+        # pointer before the first event, or the first motion is dropped.
+        time.sleep(0.4)
+
+    @property
+    def node(self) -> str:
+        dev = getattr(self._ui, "device", None)
+        return getattr(dev, "path", "?") if dev else "?"
+
+    def move(self, dx: int, dy: int) -> None:
+        if dx == 0 and dy == 0:
+            return
+        e = self._e
+        if dx:
+            self._ui.write(e.EV_REL, e.REL_X, int(dx))
+        if dy:
+            self._ui.write(e.EV_REL, e.REL_Y, int(dy))
+        self._ui.syn()
+
+    def button(self, button: int, down: bool) -> None:
+        e = self._e
+        code = self._btn.get(button, e.BTN_LEFT)
+        self._ui.write(e.EV_KEY, code, 1 if down else 0)
+        self._ui.syn()
+
+    def click(self, button: int = 1) -> None:
+        self.button(button, True)
+        time.sleep(0.02)
+        self.button(button, False)
+
+    def double_click(self, button: int = 1) -> None:
+        self.click(button)
+        time.sleep(0.03)
+        self.click(button)
+
+    def scroll(self, clicks: int) -> None:
+        if not clicks:
+            return
+        self._ui.write(self._e.EV_REL, self._e.REL_WHEEL, int(clicks))
+        self._ui.syn()
+
+    def close(self) -> None:
+        try:
+            self._ui.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class XdotoolClient:
-    """One long-lived helper; avoids fork/exec on every stick tick."""
+    """One long-lived helper; avoids fork/exec on every stick tick.
+
+    On Wayland (HD) an internal UinputMouse handles pointer motion and buttons,
+    since wlroots blocks XTEST pointer warping for Xwayland clients. Keyboard
+    combos, text, and any window-targeted ops stay on xdotool (used for the
+    in-game emulator menu, Alt+Tab, Alt+F4, and lobby chat).
+    """
 
     def __init__(self, display: str) -> None:
         self.display = display
         self._proc: subprocess.Popen[bytes] | None = None
+        self.uinput: UinputMouse | None = None
+        if HAS_EVDEV and is_wayland_session():
+            try:
+                self.uinput = UinputMouse()
+                log(
+                    "pointer backend: uinput "
+                    f"({self.uinput.node}) [Wayland/labwc]"
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.uinput = None
+                log(
+                    f"pointer backend: uinput unavailable ({exc}); "
+                    "falling back to xdotool (cursor may not move on Wayland)"
+                )
+        else:
+            log("pointer backend: xdotool [X11]")
         self._start()
 
     def _start(self) -> None:
@@ -1070,18 +1203,32 @@ class XdotoolClient:
     def move(self, dx: int, dy: int) -> None:
         if dx == 0 and dy == 0:
             return
+        if self.uinput is not None:
+            self.uinput.move(dx, dy)
+            return
         self._send(f"move {dx} {dy}")
 
     def mouse_button(self, button: int, down: bool, window: str = "") -> None:
+        if self.uinput is not None:
+            # uinput clicks at the compositor cursor; window targeting (XSendEvent)
+            # does not apply and Wine ignores it anyway.
+            self.uinput.button(button, down)
+            return
         if window:
             self._send(f"{'wdown' if down else 'wup'} {window} {button}")
         else:
             self._send(f"{'down' if down else 'up'} {button}")
 
     def click(self, button: int = 1) -> None:
+        if self.uinput is not None:
+            self.uinput.click(button)
+            return
         self._send(f"click {button}")
 
     def double_click(self, button: int = 1) -> None:
+        if self.uinput is not None:
+            self.uinput.double_click(button)
+            return
         self._send(f"dclick {button}")
 
     def mouse_down(self) -> None:
@@ -1099,6 +1246,9 @@ class XdotoolClient:
         self._send(f"type {text}")
 
     def close(self) -> None:
+        if self.uinput is not None:
+            self.uinput.close()
+            self.uinput = None
         if self._proc is None:
             return
         try:
@@ -2872,6 +3022,18 @@ def daemon_start() -> int:
     if pid2 > 0:
         os._exit(0)
 
+    # Detach stdio. The launching shell's pipes close once `restart` returns; a
+    # later stray write to a closed fd would raise and kill the daemon. Point
+    # all three at /dev/null so only the logfile matters.
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        if devnull > 2:
+            os.close(devnull)
+    except OSError:
+        pass
+
     with open(PIDFILE, "w", encoding="utf-8") as fh:
         fh.write(str(os.getpid()))
 
@@ -2880,6 +3042,12 @@ def daemon_start() -> int:
 
     try:
         run_loop(pairs, cfg)
+    except SystemExit:
+        raise
+    except BaseException:  # noqa: BLE001
+        import traceback
+
+        log("daemon crashed:\n" + traceback.format_exc())
     finally:
         try:
             os.remove(PIDFILE)
