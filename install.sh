@@ -15,7 +15,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -293,6 +293,7 @@ link_cli_tools() {
   ln -sf "${pd}/input/fightcade-pad-mouse" /usr/bin/fightcade-pad-mouse
   ln -sf "${pd}/input/fightcade-cursor" /usr/bin/fightcade-cursor
   ln -sf "${pd}/fightcade-lobby-zoom" /usr/bin/fightcade-lobby-zoom
+  ln -sf "${pd}/fightcade-lobby-vertical" /usr/bin/fightcade-lobby-vertical
   ln -sf "${pd}/fightcade-diagnose" /usr/bin/fightcade-diagnose
   ln -sf "${pd}/fightcade-collect-logs" /usr/bin/fightcade-collect-logs
 }
@@ -353,20 +354,20 @@ ES_FEATURES_CHANGED=0
 install_es_features() {
   # Batocera merges es_features_*.cfg from this dir with the system es_features.cfg
   # at EmulationStation startup. Dropping our additive file here adds the per-game
-  # "Debug Logging" toggle to the flatpak emulator's Advanced Game Options without
+  # Fightcade toggles to the flatpak emulator's Advanced Game Options without
   # touching the read-only /usr/share copy. ES only reads it at startup, so a change
   # here means ES must be restarted for the toggle to appear/update.
   local src="${PROJECT_DIR}/emulationstation/es_features_fightcade.cfg"
   local dir="/userdata/system/configs/emulationstation"
   local dst="${dir}/es_features_fightcade.cfg"
-  [ -f "${src}" ] || { warn "es_features_fightcade.cfg missing; Debug toggle will not appear"; return 0; }
+  [ -f "${src}" ] || { warn "es_features_fightcade.cfg missing; Fightcade toggles will not appear"; return 0; }
   mkdir -p "${dir}"
   if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
-    ok "ES Debug toggle feature: ${dst} (unchanged)"
+    ok "ES Fightcade features: ${dst} (unchanged)"
   else
     install -m 0644 "${src}" "${dst}"
     ES_FEATURES_CHANGED=1
-    ok "ES Debug toggle feature installed at ${dst}"
+    ok "ES Fightcade features installed at ${dst}"
   fi
 }
 
@@ -617,7 +618,7 @@ for file in ${FILES}; do
     dest_dir=$(dirname "${PROJECT_DIR}/${file}")
     mkdir -p "${dest_dir}"
     case "${file}" in
-        *.ini|*.conf|*/emu.cfg) mode=0644 ;;
+        *.ini|*.conf|*/emu.cfg|lobby/*) mode=0644 ;;
         *) mode=0755 ;;
     esac
     install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"

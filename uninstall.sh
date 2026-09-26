@@ -353,14 +353,14 @@ rm -f "${LOGS_DIR}"/fightcade-*.log \
       "${CONFIGS_DIR}"/fightcade-*.conf
 ok "Removed Fightcade logs and configs"
 
-# Additive ES feature file (the Debug Logging toggle). Removing it drops the
-# toggle from Advanced Game Options on the next ES restart.
+# Additive ES feature file (Debug Logging, Vertical Mode, lobby chat). Removing
+# it drops those controls from Advanced Game Options on the next ES restart.
 rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg"
 ok "Removed ES Debug toggle feature file"
 
 # CLI tool symlinks in /usr/bin.
 for tool in fightcade-pad-mouse fightcade-cursor fightcade-lobby-zoom \
-            fightcade-diagnose fightcade-collect-logs; do
+            fightcade-lobby-vertical fightcade-diagnose fightcade-collect-logs; do
     [ -L "/usr/bin/${tool}" ] && rm -f "/usr/bin/${tool}"
 done
 
