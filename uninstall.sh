@@ -358,6 +358,31 @@ ok "Removed Fightcade logs and configs"
 rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg"
 ok "Removed ES Debug toggle feature file"
 
+# Per-game Fightcade keys written to batocera.conf (videomode, fclobby_*,
+# fccursor_*, fcdebug, fcvertical). Delete every flatpak["Fightcade.flatpak"].*
+# line so no Fightcade setting survives. Real ROM/BIOS keys are untouched.
+BCONF="/userdata/system/batocera.conf"
+if [ -f "${BCONF}" ] && grep -q 'flatpak\["Fightcade.flatpak"\]\.' "${BCONF}" 2>/dev/null; then
+    sed -i '/^flatpak\["Fightcade\.flatpak"\]\./d' "${BCONF}"
+    ok "Removed Fightcade keys from ${BCONF}"
+else
+    notice "No Fightcade keys in batocera.conf"
+fi
+
+# ES per-game recovery/metadata node for the Fightcade flatpak entry.
+rm -f "${CONFIGS_DIR}/emulationstation/recovery/flatpak/Fightcade.xml"
+rmdir "${CONFIGS_DIR}/emulationstation/recovery/flatpak" 2>/dev/null || true
+ok "Removed ES recovery entry for Fightcade"
+
+# Orphan labwc rc.xml backup left by older fightcade-cursor versions (current
+# versions never edit rc.xml). Only the Fightcade-suffixed backup is removed.
+rm -f "/userdata/system/.config/labwc/rc.xml.bak.fightcade-cursor"
+
+# Transient runtime files (flags, logs, pidfiles, state). /tmp is tmpfs so these
+# clear on reboot, but sweep them now for an immediate clean state.
+rm -f /tmp/fightcade-* /tmp/pad-mouse.log 2>/dev/null || true
+ok "Removed transient Fightcade runtime files"
+
 # CLI tool symlinks in /usr/bin.
 for tool in fightcade-pad-mouse fightcade-cursor fightcade-lobby-zoom \
             fightcade-lobby-vertical fightcade-diagnose fightcade-collect-logs; do
