@@ -930,6 +930,11 @@ class SessionState:
         self.emu_dialog_open = False
         self.hd_windowed_emu = False
         self._hd_fullscreen_streak = 0
+        # Throttle the (expensive) xdotool windowed-state re-check once a stable HD
+        # Test Mode window is established. Polling it every refresh (0.25s) forks
+        # xdotool on the single loop thread and hitches cursor motion; the windowed
+        # <-> fullscreen transition is rare, so ~1s latency to notice it is fine.
+        self._last_windowed_check = 0.0
 
     def _apply_process_scan(self, procs: dict[str, bool]) -> None:
         prev_snes9x = self.snes9x_running
@@ -1119,6 +1124,12 @@ class SessionState:
             hd_mode = not crt_switchres_active() and not crt_cursor_profile(display)
             if (self.fbneo_running or self.snes9x_running) and hd_mode:
                 if self.hd_windowed_emu:
+                    # Steady-state Test Mode window: only re-run the xdotool windowed
+                    # check ~1x/sec so cursor motion (same thread) does not hitch
+                    # every 0.25s. Between checks, keep the current windowed state.
+                    if now - self._last_windowed_check < 1.0:
+                        return
+                    self._last_windowed_check = now
                     if not wine_emu_window_is_windowed(display):
                         self._hd_fullscreen_streak += 1
                         if self._hd_fullscreen_streak >= 2:
