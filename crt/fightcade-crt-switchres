@@ -421,7 +421,8 @@ hd_pause_snes9x_menu() {
 
 hd_resume_snes9x_menu() {
     local mw mh
-    crt_is_paused || return 0
+    # SELECT+NORTH on HD must ALWAYS close the menu and return to fullscreen, even
+    # if the crt_paused() flag desynced, so do not early-return on pause state.
     read -r mw mh <<< "$(hd_display_pixels)"
     fightcade_wine_emu_send_key snes9x Escape
     sleep 0.1

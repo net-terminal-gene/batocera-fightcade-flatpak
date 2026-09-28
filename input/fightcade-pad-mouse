@@ -58,6 +58,11 @@ CRT_STATEFILE = "/tmp/fightcade-switchres-wrap.state"
 FLYCAST_PGREP_RE = r"flycast\.elf"
 FBNEO_PGREP_RE = r"fcadefbneo\.exe"
 SNES9X_PGREP_RE = r"fcadesnes9x\.exe"
+# Active snes9x config (symlinked from the app dir into writable app-data).
+SNES9X_CONF = (
+    "/userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade"
+    "/data/config/snes9x/fcadesnes9x.conf"
+)
 
 EV_KEY = 0x01
 EV_ABS = 0x03
@@ -927,10 +932,16 @@ class SessionState:
         self._hd_fullscreen_streak = 0
 
     def _apply_process_scan(self, procs: dict[str, bool]) -> None:
+        prev_snes9x = self.snes9x_running
         self.fc_running = procs["fc"]
         self.fbneo_running = procs["fbneo"]
         self.snes9x_running = procs["snes9x"]
         self.flycast_running = procs["flycast"]
+        # snes9x just exited on Deck HD: it may have saved Fullscreen:Enabled=FALSE
+        # (from opening the in-game menu). Re-assert fullscreen in the now-written
+        # config so the next launch is not windowed. Controllers are left intact.
+        if prev_snes9x and not self.snes9x_running and wayland_hd_session():
+            normalize_snes9x_fullscreen()
 
     def refresh(self, display: str, force: bool = False) -> None:
         if is_wayland_session() and not crt_switchres_active():
@@ -2480,6 +2491,45 @@ def wayland_hd_session() -> bool:
     return is_wayland_session() and not crt_switchres_active()
 
 
+def normalize_snes9x_fullscreen() -> None:
+    """Re-assert fullscreen in the snes9x config after it exits (Deck HD).
+
+    Opening the in-game menu (SELECT+WEST) drops snes9x out of emulated
+    fullscreen so the menu bar can show. The config is now unlocked (Lock=FALSE)
+    so controller remaps persist, but that also means snes9x writes
+    Fullscreen:Enabled=FALSE on exit, leaving the next launch windowed. Force the
+    display/fullscreen keys back to TRUE. Only the [Display\\Win] keys are
+    touched; [Controls] (the user's saved bindings) is never modified.
+    """
+    force_true = ("Fullscreen:Enabled", "Fullscreen:EmulateFullscreen", "HideMenu")
+    try:
+        with open(SNES9X_CONF, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    changed = False
+    for i, line in enumerate(lines):
+        for key in force_true:
+            m = re.match(
+                r"^(\s*" + re.escape(key) + r"\s*=\s*)(\S+)(.*)$", line
+            )
+            if m and m.group(2) != "TRUE":
+                lines[i] = f"{m.group(1)}TRUE{m.group(3)}\n"
+                changed = True
+            if m:
+                break
+    if not changed:
+        return
+    try:
+        tmp = SNES9X_CONF + ".padmouse.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        os.replace(tmp, SNES9X_CONF)
+        log("normalized snes9x fullscreen after exit")
+    except OSError as exc:
+        log(f"snes9x fullscreen normalize failed: {exc}")
+
+
 def set_cursor_visible(visible: bool, display: str, *, hd_windowed: bool = False) -> None:
     # labwc HD: uinput drives the seat pointer; ShowCursor/HideCursor warps and loops.
     if wayland_hd_session():
@@ -3056,7 +3106,10 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
                     if hd_snes:
-                        snes_open = not crt_paused()
+                        # HD Deck: SELECT+WEST must ALWAYS open the menu, never a
+                        # toggle gated on the crt_paused() flag (which can desync
+                        # across relaunches and make the combo feel reversed).
+                        snes_open = True
                     else:
                         snes_open = (
                             not session.crt_paused
@@ -3111,7 +3164,9 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
                     if hd_snes:
-                        snes_close = crt_paused()
+                        # HD Deck: SELECT+NORTH must ALWAYS close the menu and go
+                        # back to fullscreen, regardless of the crt_paused() flag.
+                        snes_close = True
                     else:
                         snes_close = crt_paused()
                     if snes_close:
