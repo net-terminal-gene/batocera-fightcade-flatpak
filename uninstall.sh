@@ -19,6 +19,16 @@
 
 set -eu
 
+REPO="net-terminal-gene/batocera-fightcade-flatpak"
+# curl | bash puts this script on bash's stdin. When flatpak's progress UI reads
+# that same stdin it swallows the rest of the not-yet-read script, so bash resumes
+# mid-command and dies with a syntax error, aborting the uninstall partway (right
+# after the Flatpak app is removed). See bootstrap_off_pipe_if_needed: re-exec from
+# a temp file so nothing can truncate the script. --branch / FIGHTCADE_FLATPAK_BRANCH
+# selects which ref to re-fetch from (default main; uninstall logic is ref-agnostic).
+BRANCH="${FIGHTCADE_FLATPAK_BRANCH:-main}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
 SCRIPTS_DIR="/userdata/system/scripts"
@@ -33,12 +43,18 @@ LOGS_DIR="/userdata/system/logs"
 CONFIGS_DIR="/userdata/system/configs"
 
 AUTO_YES=0
+BRANCH_FROM_ARGS=""
 
 info()   { printf '%s\n'       "$*"; }
 ok()     { printf '[ OK ] %s\n' "$*"; }
 notice() { printf '[INFO] %s\n' "$*"; }
 warn()   { printf '[WARN] %s\n' "$*"; }
 fail()   { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+
+set_branch() {
+    BRANCH="$1"
+    RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+}
 
 usage() {
     cat <<USAGE
@@ -48,19 +64,30 @@ Completely removes Fightcade and all related files.
 Your ROM files and BIOS are never touched.
 
 Options:
-  -y, --yes    Accept all prompts automatically.
-  -h, --help   Show this help.
+  -y, --yes        Accept all prompts automatically.
+      --branch REF Re-fetch ref for the pipe bootstrap (maintainer use; default main).
+  -h, --help       Show this help.
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -y|--yes) AUTO_YES=1 ;;
+        --branch)
+            [ "$#" -ge 2 ] || fail "--branch requires a branch or tag name"
+            BRANCH_FROM_ARGS="$2"
+            shift
+            ;;
         -h|--help) usage; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
     shift
 done
+
+# --branch wins over the environment default set above.
+if [ -n "${BRANCH_FROM_ARGS}" ]; then
+    set_branch "${BRANCH_FROM_ARGS}"
+fi
 
 ask_yes_no() {
     local prompt="$1"
@@ -91,6 +118,42 @@ ask_yes_no() {
         *)           return 1 ;;
     esac
 }
+
+# True when running from a real on-disk checkout (installed scripts), where the
+# script is a file (not a pipe) and flatpak cannot truncate it.
+is_local_source() {
+    [ -n "${BASH_SOURCE[0]:-}" ] && \
+    [ -f "${BASH_SOURCE[0]}" ] && \
+    [ -f "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/install.sh" ]
+}
+
+# When invoked as `curl ... | bash`, re-download this script to a temp file and
+# re-exec from disk so flatpak's stdin reads cannot swallow the rest of the
+# script. Mirrors install.sh's bootstrap. Safe no-op for local runs and after the
+# first re-exec.
+bootstrap_off_pipe_if_needed() {
+    [ -n "${FIGHTCADE_UNINSTALL_BOOTSTRAPPED:-}" ] && return 0
+    is_local_source && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local bootstrap
+    bootstrap=$(mktemp /tmp/fightcade-flatpak-uninstall.XXXXXX.sh) || return 0
+    notice "Bootstrapping uninstaller from ${RAW_BASE}/uninstall.sh"
+    if ! curl -fsSL --retry 3 --connect-timeout 15 \
+            "${RAW_BASE}/uninstall.sh" -o "${bootstrap}"; then
+        warn "Could not re-download uninstall.sh; continuing on the pipe."
+        rm -f "${bootstrap}"
+        return 0
+    fi
+    chmod +x "${bootstrap}"
+    export FIGHTCADE_UNINSTALL_BOOTSTRAPPED=1
+    export FIGHTCADE_FLATPAK_BRANCH="${BRANCH}"
+    local reexec_args=()
+    [ "${AUTO_YES}" -eq 1 ] && reexec_args+=(-y)
+    exec bash "${bootstrap}" "${reexec_args[@]}"
+}
+
+bootstrap_off_pipe_if_needed
 
 printf '%s\n' '------------------------------------------------------------'
 printf '%s\n' ' Fightcade Flatpak Complete Removal'
