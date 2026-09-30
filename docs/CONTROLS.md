@@ -78,10 +78,15 @@ there), and it switches based on your display, no setup needed.
 When you need fine, pixel-level aiming, hold **R2** while you move. It works the same in
 both HD and CRT.
 
-Most people never touch this. If you want to change the speeds, they live in
-`/userdata/system/configs/fightcade-pad-mouse.conf`, with separate HD and CRT values
-(and separate `max_*` / `slow_*` keys for in-game, lobby, and menus). The file's header
-comments explain the naming. Quit and relaunch Fightcade after editing.
+You may need to adjust the speed depending on which device you are running Fightcade on.
+To change the speeds, open the Fightcade entry's **Advanced Game Options** in
+EmulationStation (highlight Fightcade, press the game-options button; do not use LAUNCH
+in that menu) and use the **CURSOR SPEED** sliders:
+
+- **NORMAL** sets the stick / D-pad pointer speed, in pixels per poll (1-40, default 20).
+- **SLOWDOWN** sets the pointer speed while **R2** is held for fine aiming (0.25-5, default 3).
+
+Quit and relaunch Fightcade for a change to take effect.
 
 ### Emulator menus (FBNeo / SNES)
 
