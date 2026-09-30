@@ -174,7 +174,18 @@ restore_ini() {
     local ini="$1"
     [ -n "$ini" ] || return 0
     if [ -f "${ini}.bak.switchres" ]; then
+        # FBNeo rewrites the whole main ini when a game quits, so restoring the
+        # pre-game backup would wipe in-game video-menu changes. Carry over the
+        # "Rotate vertically aligned games" toggle (nVidRotationAdjust), which
+        # switchres does not manage, so the user's choice survives the restore.
+        local rot=""
+        if [ -f "$ini" ]; then
+            rot=$(sed -n 's/^nVidRotationAdjust //p' "$ini" | head -n1 | tr -d '[:space:]')
+        fi
         mv -f "${ini}.bak.switchres" "$ini"
+        if [ -n "$rot" ] && [ -f "$ini" ] && grep -q '^nVidRotationAdjust ' "$ini"; then
+            sed -i "s/^nVidRotationAdjust .*/nVidRotationAdjust $rot/" "$ini"
+        fi
     fi
 }
 
