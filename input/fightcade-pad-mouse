@@ -33,6 +33,10 @@ except ImportError:
     HAS_EVDEV = False
 
 PIDFILE = "/tmp/fightcade-pad-mouse.pid"
+# Written by fightcade-crt-switchres while a vertical FBNeo session has the
+# output rotated. X coordinates already match the tube, so the lobby transform
+# must not run on top of that.
+VERT_DISPLAY_FLAG = "/tmp/fightcade-fbneo-vertical-rotate"
 LOCKFILE = "/tmp/fightcade-pad-mouse.lock"
 LOGFILE = "/tmp/pad-mouse.log"
 DISABLE = "/userdata/system/configs/fightcade-pad-mouse.disable"
@@ -3390,10 +3394,13 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     if deck_hd:
                         frac_x = 0.0
                         frac_y = 0.0
-                if vertical_mode:
+                if vertical_mode and not os.path.isfile(VERT_DISPLAY_FLAG):
                     # Lobby is rotated 90 deg CW but X stays landscape. Rotate the
                     # cursor delta so pad-right moves physical-right, etc.
                     # screen = translate(winW,0) rotate(90) scale: (dx,dy) -> (-dy,dx).
+                    # Skip this while FBNeo has xrandr-rotated the output: X already
+                    # matches the tube, and a second transform would aim the cursor
+                    # the wrong way in the in-game menu.
                     dx, dy = -dy, dx
                 move_mouse(dx, dy, xdotool)
     finally:

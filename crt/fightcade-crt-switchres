@@ -14,6 +14,10 @@ STATEFILE="/tmp/fightcade-switchres-wrap.state"
 PAUSEFILE="/tmp/fightcade-switchres-wrap.pause"
 HOTKEY_PIDFILE="/tmp/fightcade-switchres-wrap.hotkey.pid"
 FBNEO_ACTIVE_FLAG="/tmp/fightcade-fbneo-crt-active"
+# Set only while the vertical-mode FBNeo in-game menu has the output rotated.
+# Pad-mouse skips its lobby cursor transform while this exists, because X itself
+# is rotated. Gameplay never sets it: rotating the game mode breaks fullscreen.
+VERT_ROTATE_FLAG="/tmp/fightcade-fbneo-vertical-rotate"
 FLYCAST_GAME_FLAG="/tmp/fightcade-flycast-game-active"
 MONITOR_PIDFILE="/tmp/fightcade-switchres-wrap.monitor.pid"
 LOG_FILE="/userdata/system/logs/fightcade-crt-switchres.log"
@@ -644,13 +648,89 @@ fightcade_ensure_menu_baseline() {
 fightcade_output_mode_is() {
     local out="$1" w="$2" h="$3"
     [ -n "$out" ] && [ -n "$w" ] && [ -n "$h" ] || return 1
-    xrandr 2>/dev/null | awk -v O="$out" -v G="${w}x${h}+" '
+    # A left/right rotation swaps the geometry on the connected line (448x224
+    # becomes 224x448 right). Treat that as the same mode so a later reassert
+    # does not modeset and wipe the rotation.
+    xrandr 2>/dev/null | awk -v O="$out" -v G="${w}x${h}+" -v S="${h}x${w}+" '
         $1 == O && $2 == "connected" {
-            for (i = 3; i <= NF; i++)
-                if (index($i, G) == 1) { found = 1; exit }
+            rot = "normal"
+            geom = ""
+            for (i = 3; i <= NF; i++) {
+                if (index($i, "x") && index($i, "+")) geom = $i
+                if ($i == "left" || $i == "right" || $i == "inverted" || $i == "normal") rot = $i
+            }
+            if (index(geom, G) == 1) { found = 1; exit }
+            if ((rot == "left" || rot == "right") && index(geom, S) == 1) { found = 1; exit }
         }
         END { exit !found }
     '
+}
+
+fightcade_vertical_on() {
+    local v
+    v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcvertical' 2>/dev/null | tr -d '[:space:]')
+    [ "$v" = "1" ]
+}
+
+fightcade_primary_output() {
+    local out
+    out=$(batocera-resolution currentOutput 2>/dev/null)
+    if [ -z "$out" ]; then
+        out=$(xrandr 2>/dev/null | awk '$2 == "connected" && /primary/ { print $1; exit }')
+    fi
+    [ -z "$out" ] && out="DVI-I-1"
+    printf '%s\n' "$out"
+}
+
+fightcade_output_rotation() {
+    local out="$1"
+    xrandr 2>/dev/null | awk -v O="$out" '
+        $1 == O && $2 == "connected" {
+            for (i = 3; i <= NF; i++)
+                if ($i == "left" || $i == "right" || $i == "inverted" || $i == "normal") {
+                    print $i
+                    exit
+                }
+        }
+    '
+}
+
+# Vertical/TATE FBNeo: the Win32 menu bar is stuck to the window top, which lands
+# on the physical side of a landscape signal. Rotate the output right only while
+# that menu is open (confirmed on this CRT). Gameplay stays unrotated.
+# True when vertical mode is on and an FBNeo-style emu is running.
+fightcade_vertical_menu_rotate_wanted() {
+    local e
+    fightcade_vertical_on || return 1
+    e=$(fightcade_running_wine_menu_emu 2>/dev/null) || return 1
+    case "$e" in
+        fbneo|ggpofba) return 0 ;;
+    esac
+    return 1
+}
+
+fightcade_apply_fbneo_vertical_rotation() {
+    local out rot
+    [ -f "$VERT_ROTATE_FLAG" ] || return 0
+    export DISPLAY=$(fightcade_pick_display)
+    out=$(fightcade_primary_output)
+    rot=$(fightcade_output_rotation "$out")
+    [ "$rot" = "right" ] && return 0
+    xrandr --output "$out" --rotate right 2>/dev/null || true
+    dbg "vertical fbneo: output $out rotate right"
+}
+
+fightcade_clear_fbneo_vertical_rotation() {
+    local out rot
+    [ -f "$VERT_ROTATE_FLAG" ] || return 0
+    export DISPLAY=$(fightcade_pick_display)
+    out=$(fightcade_primary_output)
+    rot=$(fightcade_output_rotation "$out")
+    if [ -n "$rot" ] && [ "$rot" != "normal" ]; then
+        xrandr --output "$out" --rotate normal 2>/dev/null || true
+        dbg "vertical fbneo: output $out rotate normal"
+    fi
+    rm -f "$VERT_ROTATE_FLAG"
 }
 
 fightcade_reassert_switchres_output() {
@@ -663,6 +743,9 @@ fightcade_reassert_switchres_output() {
     [ -z "$out" ] && out="DP-1"
     # Every xrandr modeset makes the CRT drop and relock sync, which is a visible
     # flash, so verify before touching the mode instead of setting it unconditionally.
+    # Do not rotate here. Rotating the game mode (often 224 lines tall, which
+    # becomes a sub-320-wide framebuffer) fights FBNeo fullscreen: X will not
+    # shrink below 320px and FBNeo keeps a landscape-sized fullscreen window.
     fightcade_output_mode_is "$out" "$w" "$h" && return 0
     for i in 1 2 3 4 5 6; do
         mode=$(xrandr 2>/dev/null | awk -v W="$w" -v H="$h" '$1 ~ /^SR-/ && index($1, W "x" H) { print $1; exit }')
@@ -875,7 +958,12 @@ fightcade_display_at_resolution() {
     if [ -z "$cr" ]; then
         cr=$(xrandr 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1x\2/p' | head -1)
     fi
-    [ "${cr}" = "${w}x${h}" ]
+    [ "${cr}" = "${w}x${h}" ] && return 0
+    # Rotated FBNeo scanout reports the swapped size. That is still the game mode.
+    if [ -f "$VERT_ROTATE_FLAG" ] && [ "${cr}" = "${h}x${w}" ]; then
+        return 0
+    fi
+    return 1
 }
 
 fightcade_same_play_session_active() {
@@ -1075,6 +1163,14 @@ crt_pause_switchres() {
     [ -f "$PAUSEFILE" ] && [ "$(cat "$PAUSEFILE" 2>/dev/null)" = "1" ] && return 0
     export DISPLAY=$(fightcade_pick_display)
     restore_display_mode "$pre_mode" "$pre_res"
+    # Menu only. The lobby mode (641x480) is large enough to rotate without
+    # dropping under X's 320px minimum. Gameplay stays unrotated so FBNeo can
+    # fill the CRT. The Win32 menu bar sits on the window top, which rotate-right
+    # maps to the physical top of a TATE tube.
+    if fightcade_vertical_menu_rotate_wanted; then
+        printf '1\n' > "$VERT_ROTATE_FLAG"
+        fightcade_apply_fbneo_vertical_rotation
+    fi
     printf '1\n' > "$PAUSEFILE"
     fightcade_cursor_show
 }
@@ -1084,6 +1180,9 @@ crt_resume_switchres() {
     [ ! -f "$PAUSEFILE" ] && return 0
     [ "$(cat "$PAUSEFILE" 2>/dev/null)" != "1" ] && return 0
     export DISPLAY=$(fightcade_pick_display)
+    # Drop the menu rotation before the game mode is restored. Rotating the
+    # game mode itself breaks FBNeo fullscreen.
+    fightcade_clear_fbneo_vertical_rotation
     fightcade_drop_stale_switchres_modes
     /usr/bin/switchres "$w" "$h" "$r" -s -k 2>&1 || true
     fightcade_reassert_switchres_output "$w" "$h"
@@ -1513,6 +1612,7 @@ fightcade_monitor_play() {
         if crt_switchres_emu "$emu"; then
             restore_display_mode "${PRE_MODE:-}" "${PRE_RES:-}"
         fi
+        fightcade_clear_fbneo_vertical_rotation
         fightcade_clear_session_state
         restore_done=1
     }
@@ -1623,6 +1723,7 @@ fightcade_emergency_recover() {
     restore_all_configs
     fightcade_apply_hd_video_baseline
     fightcade_drop_stale_switchres_modes
+    fightcade_clear_fbneo_vertical_rotation
     fightcade_clear_session_state
     batocera-resolution minTomaxResolution 2>/dev/null || true
     sleep 0.35
