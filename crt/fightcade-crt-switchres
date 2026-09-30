@@ -14,9 +14,11 @@ STATEFILE="/tmp/fightcade-switchres-wrap.state"
 PAUSEFILE="/tmp/fightcade-switchres-wrap.pause"
 HOTKEY_PIDFILE="/tmp/fightcade-switchres-wrap.hotkey.pid"
 FBNEO_ACTIVE_FLAG="/tmp/fightcade-fbneo-crt-active"
-# Set only while the vertical-mode FBNeo in-game menu has the output rotated.
-# Pad-mouse skips its lobby cursor transform while this exists, because X itself
-# is rotated. Gameplay never sets it: rotating the game mode breaks fullscreen.
+# Set while vertical mode has rotated the output: the FBNeo in-game menu, or a
+# whole Flycast session. Pad-mouse skips its lobby cursor transform while this
+# exists, because X itself is rotated. FBNeo gameplay never sets it: rotating
+# that game mode breaks fullscreen. Flycast stays at the lobby resolution, so
+# the whole session can rotate.
 VERT_ROTATE_FLAG="/tmp/fightcade-fbneo-vertical-rotate"
 FLYCAST_GAME_FLAG="/tmp/fightcade-flycast-game-active"
 MONITOR_PIDFILE="/tmp/fightcade-switchres-wrap.monitor.pid"
@@ -1643,6 +1645,14 @@ fightcade_monitor_play() {
     # Hide as soon as Flycast is up, not once a game is loaded: the boot and Dojo
     # screens do not need a pointer either.
     [ "$emu" = "flycast" ] && fightcade_cursor_hide
+    # Flycast runs at the lobby resolution, so rotate-right turns the game and
+    # its menu together. The window follows the new framebuffer (observed
+    # 641x480 -> 480x641). FBNeo cannot do this during play.
+    if [ "$emu" = "flycast" ] && fightcade_vertical_on; then
+        printf '1\n' > "$VERT_ROTATE_FLAG"
+        fightcade_apply_fbneo_vertical_rotation
+        dbg "vertical flycast: output rotated right"
+    fi
 
     export DISPLAY=$(fightcade_pick_display)
 
