@@ -16,6 +16,7 @@ CRT_HOSTD="${PROJECT_DIR}/crt/fightcade-crt-hostd"
 CRT_RECOVER="${PROJECT_DIR}/crt/fightcade-crt-recover"
 PAD_MOUSE="${PROJECT_DIR}/input/fightcade-pad-mouse"
 LOBBY_ZOOM="${PROJECT_DIR}/fightcade-lobby-zoom"
+LOBBY_VERTICAL="${PROJECT_DIR}/fightcade-lobby-vertical"
 COLLECT_LOGS="${PROJECT_DIR}/fightcade-collect-logs"
 LOG_DIR="/userdata/system/logs"
 
@@ -69,6 +70,61 @@ sync_lobby_chat() {
     done
 }
 
+# Per-game CURSOR SPEED sliders (WEST/EAST). Empty leaves fightcade-pad-mouse.conf
+# alone. A numeric value overlays the active HD or CRT normal+lobby pair; menu
+# and drag speeds stay on the conf file.
+CURSOR_SPEED_OVERLAY="/tmp/fightcade-cursor-speed.conf"
+
+cursor_speed_profile() {
+    if [ -x "$LOBBY_ZOOM" ]; then
+        "$LOBBY_ZOOM" detect 2>/dev/null || echo hd
+    else
+        echo hd
+    fi
+}
+
+cursor_speed_numeric() {
+    local v="$1"
+    case "$v" in
+        '' | *[!0-9.]* | . | *.*.* | 0 | 0.0 | 0.00) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+sync_cursor_speed() {
+    local mode maxv slowv overlay=""
+    rm -f "$CURSOR_SPEED_OVERLAY"
+    mode=$(cursor_speed_profile | tr -d '[:space:]')
+    case "$mode" in
+        hd|crt) ;;
+        *) mode=hd ;;
+    esac
+    maxv=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fccursor_max' 2>/dev/null | tr -d '[:space:]')
+    slowv=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fccursor_slow' 2>/dev/null | tr -d '[:space:]')
+    if cursor_speed_numeric "$maxv"; then
+        overlay="${overlay}max_speed_${mode}=${maxv}
+max_speed_${mode}_lobby=${maxv}
+"
+        # HD in-game menu used a separate faster table (30/5). Apply the ES
+        # sliders there too. CRT menu keys stay on the shipped conf.
+        if [ "$mode" = "hd" ]; then
+            overlay="${overlay}max_speed_hd_menu=${maxv}
+"
+        fi
+    fi
+    if cursor_speed_numeric "$slowv"; then
+        overlay="${overlay}slow_speed_${mode}=${slowv}
+slow_speed_${mode}_lobby=${slowv}
+"
+        if [ "$mode" = "hd" ]; then
+            overlay="${overlay}slow_speed_hd_menu=${slowv}
+"
+        fi
+    fi
+    [ -n "$overlay" ] || return 0
+    printf '%s' "$overlay" > "$CURSOR_SPEED_OVERLAY"
+}
+
 [ "$SYSTEM" = "flatpak" ] || exit 0
 
 case "$EVENT" in
@@ -102,7 +158,7 @@ if [ "$EVENT" = "gameStop" ]; then
     [ -x "$PAD_MOUSE" ] && "$PAD_MOUSE" stop
     [ -x "$CRT_HOSTD" ] && "$CRT_HOSTD" stop
     [ -x "$CRT_RECOVER" ] && "$CRT_RECOVER"
-    rm -f "$FC_DEBUG_FLAG"
+    rm -f "$FC_DEBUG_FLAG" "$CURSOR_SPEED_OVERLAY"
     exit 0
 fi
 
@@ -118,11 +174,18 @@ fi
 
 # Push any per-game lobby-chat edits into the conf before pad-mouse starts below.
 sync_lobby_chat
+sync_cursor_speed
 
 # Runs before Fightcade launches, so Chromium reads the mode-correct lobby zoom
 # from Preferences at startup. Must stay synchronous (not backgrounded).
 if [ -x "$LOBBY_ZOOM" ]; then
     "$LOBBY_ZOOM" apply >>/tmp/fightcade-lobby-zoom.log 2>&1 || true
+fi
+
+# Vertical/TATE lobby inject must be in the Nativefier app dir before Electron
+# starts. ON copies inject.js/css; OFF removes them. Synchronous on purpose.
+if [ -x "$LOBBY_VERTICAL" ]; then
+    "$LOBBY_VERTICAL" apply >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
 fi
 
 if [ -x "$SYNC_SCRIPT" ]; then

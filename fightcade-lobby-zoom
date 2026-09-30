@@ -19,6 +19,7 @@ set -uo pipefail
 APP_ID="com.fightcade.Fightcade"
 FC_CFG="/userdata/saves/flatpak/data/.var/app/${APP_ID}/config/Fightcade"
 PREFS="${FC_CFG}/Preferences"
+WSTATE="${FC_CFG}/window-state.json"
 HOST="web.fightcade.com"
 
 CONF="/userdata/system/configs/fightcade-lobby-zoom.conf"
@@ -124,10 +125,46 @@ os.replace(tmp, prefs)
 PY
 }
 
+# Fightcade (Electron) persists one shared window size in window-state.json and
+# reuses it on every launch, with no idea about HD vs CRT. A window last sized on
+# a 640x480 CRT then reopens tiny on a 1280x800 HD panel (the Steam Deck's native
+# size), so a new user gets a small lobby stranded in the corner. Force the window
+# to fill the current display before launch so no stale size can shrink it. This is
+# mode-agnostic: on CRT the display is 640x480, on HD it is the panel size.
+apply_window_state() {
+    local geom w h
+    geom=$(DISPLAY=:0 xdotool getdisplaygeometry 2>/dev/null)
+    w="${geom%% *}"
+    h="${geom##* }"
+    case "${w}:${h}" in
+        '':* | *:'' | *[!0-9]*:* | *:*[!0-9]*)
+            log "no usable display geometry; leaving window-state as-is"
+            return 0 ;;
+    esac
+    [ "$w" -gt 0 ] && [ "$h" -gt 0 ] || { log "display geometry not positive; skip"; return 0; }
+    mkdir -p "$FC_CFG"
+    W="$w" H="$h" WSTATE="$WSTATE" python3 - <<'PY'
+import json, os
+w = int(os.environ["W"]); h = int(os.environ["H"])
+state = {
+    "width": w, "height": h, "x": 0, "y": 0,
+    "displayBounds": {"x": 0, "y": 0, "width": w, "height": h},
+    "isMaximized": True, "isFullScreen": False,
+}
+path = os.environ["WSTATE"]
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(state, fh)
+os.replace(tmp, path)
+PY
+    log "set lobby window to ${w}x${h} (fill display)"
+}
+
 cmd_apply() {
     local mode zoom
     mode=$(detect_mode)
     echo "$mode" > "$MODE_STATE" 2>/dev/null || true
+    apply_window_state
     zoom=$(conf_get "zoom_${mode}")
     if [ -z "$zoom" ]; then
         log "no saved zoom for ${mode}; leaving Preferences as-is"
@@ -161,6 +198,8 @@ cmd_status() {
     echo "  zoom_hd    = $(conf_get zoom_hd)"
     echo "  zoom_crt   = $(conf_get zoom_crt)"
     echo "live zoom (${HOST}): $(prefs_get_zoom)"
+    echo "display:     $(DISPLAY=:0 xdotool getdisplaygeometry 2>/dev/null)"
+    echo "window-state:$( [ -f "$WSTATE" ] && cat "$WSTATE" || echo ' (none)')"
 }
 
 case "${1:-}" in

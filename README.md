@@ -182,6 +182,7 @@ Most issues while navigating with a gamepad have a quick fix:
 | **Weird behavior after changing settings in the in-game menu** | Quit to the lobby (**SELECT + Start**) and relaunch the game so it starts clean. On CRT this also avoids stray Switchres toggles. |
 | **FBNeo settings not saving** | HD-only: all settings persist normally after install. CRT: per-game settings persist; global video settings reset after games (Switchres restoration). See [docs/HD.md — Settings persistence](docs/HD.md#settings-persistence) or [docs/CRT.md — Settings persistence](docs/CRT.md#settings-persistence). |
 | **Control Center keeps opening mid-game** | That's Batocera's **Hotkey + EAST** global combo. See [docs/CONTROLS.md — Batocera hotkeys](docs/CONTROLS.md#batocera-hotkeys-select). |
+| **Steam Deck: external controller won't drive the Flycast menu** | Assign the ports inside Flycast once (Test Mode → touchscreen **Settings → Controls** → your pad to **Port A**). See [docs/CONTROLS.md — Flycast (Dojo)](docs/CONTROLS.md#context-table). |
 | **Lobby looks cropped / oversized on CRT** | Fightcade's Video Mode must resolve to **640×480**. See [docs/CRT.md](docs/CRT.md#crt--switchres-support). |
 | **Install seems incomplete or broken** | Run `/userdata/system/fightcade-flatpak/fightcade-diagnose` to check install integrity, then re-run the installer (it's safe). |
 | **Reporting a bug (menu, Switchres, crashes)** | Turn on **DEBUG LOGGING**, reproduce, then share the single report file it writes. See [docs/DEBUGGING.md](docs/DEBUGGING.md). |

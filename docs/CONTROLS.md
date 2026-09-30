@@ -162,6 +162,20 @@ Flycast is handled by Dojo itself: **SELECT** opens its in-game menu, which also
 the game. No cursor is shown at any point in a Flycast session, and SELECT + WEST /
 NORTH do nothing there.
 
+> [!NOTE]
+> **Steam Deck + external controller (Flycast only):** On the Steam Deck, an external
+> controller assigned to **P1's CONTROLLER** in EmulationStation does **not** drive the
+> Flycast menu correctly. Out of the box you end up navigating with the Deck's built-in
+> controller instead. To use your external pad, assign the ports inside Flycast once:
+>
+> 1. Launch the game in **TEST MODE**.
+> 2. Using the **Steam Deck touchscreen**, tap **Settings → Controls**.
+> 3. Assign your desired controller to **Port A**, and the **Steam Deck controller** to a
+>    different port.
+> 4. Tap the **bottom-left button in the left Settings nav bar** to apply.
+>
+> This is Deck-specific; on a PC (single external pad) the stock P1 assignment works.
+
 CRT users: **ESC** and **Alt+Delete** for FBNeo/SNES menus at native resolution are
 documented in [CRT.md — Keyboard](CRT.md#keyboard-fbneo--snes).
 

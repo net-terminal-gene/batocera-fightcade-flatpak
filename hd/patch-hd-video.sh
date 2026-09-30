@@ -67,22 +67,15 @@ install_hd_presets() {
 patch_fbneo_hd_ini() {
     local ini="$1"
     [ -f "$ini" ] || { log "skip fbneo (no ini; preset missing from ${PRESETS_DIR})"; return 0; }
+    # Only the fullscreen resolution is panel-specific. Aspect, vsync, windowed
+    # menu, arcade-res-off, window position, etc. all ship correct in the preset
+    # ini (hd/presets/fcadefbneo.ini), so we no longer re-set them here.
     sed -i "s/^nVidHorWidth .*/nVidHorWidth ${HD_WIDTH}/" "$ini"
     sed -i "s/^nVidHorHeight .*/nVidHorHeight ${HD_HEIGHT}/" "$ini"
     sed -i "s/^nVidVerWidth .*/nVidVerWidth ${HD_WIDTH}/" "$ini"
     sed -i "s/^nVidVerHeight .*/nVidVerHeight ${HD_HEIGHT}/" "$ini"
-    sed -i 's/^bVidFullStretch .*/bVidFullStretch 0/' "$ini"
-    sed -i 's/^bVidCorrectAspect .*/bVidCorrectAspect 1/' "$ini"
-    sed -i 's/^bVidAutoSwitchFull .*/bVidAutoSwitchFull 0/' "$ini"
-    sed -i 's/^bVidDX9WinFullscreen .*/bVidDX9WinFullscreen 0/' "$ini"
-    sed -i 's/^bVidArcaderesHor .*/bVidArcaderesHor 0/' "$ini"
-    sed -i 's/^bVidArcaderesVer .*/bVidArcaderesVer 0/' "$ini"
-    sed -i 's/^bMonitorAutoCheck .*/bMonitorAutoCheck 1/' "$ini"
     sed -i 's/^bVidVSync .*/bVidVSync 1/' "$ini"
-    sed -i 's/^bVidTripleBuffer .*/bVidTripleBuffer 1/' "$ini"
-    sed -i 's/^nWindowPosX .*/nWindowPosX 0/' "$ini"
-    sed -i 's/^nWindowPosY .*/nWindowPosY 0/' "$ini"
-    log "fbneo ini: ${HD_WIDTH}x${HD_HEIGHT}, correct aspect, windowed menu, vsync"
+    log "fbneo ini: ${HD_WIDTH}x${HD_HEIGHT}, vsync"
 }
 
 patch_ggpofba_hd_ini() {
@@ -96,18 +89,19 @@ patch_ggpofba_hd_ini() {
 patch_snes9x_hd_conf() {
     local conf="$1"
     [ -f "$conf" ] || { log "skip snes9x (no conf; preset missing from ${PRESETS_DIR})"; return 0; }
+    # Only the fullscreen resolution is panel-specific. Depth, EmulateFullscreen,
+    # HideMenu, 4:3 aspect and bilinear ship correct in the preset conf
+    # (hd/presets/fcadesnes9x.conf), so we no longer re-set them here.
     sed -i 's/^\([[:space:]]*Fullscreen:Enabled[[:space:]]*=\).*/\1 TRUE/' "$conf"
     sed -i "s/^\([[:space:]]*Fullscreen:Width[[:space:]]*=\).*/\1 ${HD_WIDTH}/" "$conf"
     sed -i "s/^\([[:space:]]*Fullscreen:Height[[:space:]]*=\).*/\1 ${HD_HEIGHT}/" "$conf"
-    sed -i 's/^\([[:space:]]*Fullscreen:Depth[[:space:]]*=\).*/\1 32/' "$conf"
-    sed -i 's/^\([[:space:]]*Fullscreen:EmulateFullscreen[[:space:]]*=\).*/\1 TRUE/' "$conf"
-    sed -i 's/^\([[:space:]]*HideMenu[[:space:]]*=\).*/\1 TRUE/' "$conf"
-    sed -i 's/^\([[:space:]]*Stretch:MaintainAspectRatio[[:space:]]*=\).*/\1 TRUE/' "$conf"
-    sed -i 's/^\([[:space:]]*Stretch:AspectRatioBaseWidth[[:space:]]*=\).*/\1 299/' "$conf"
-    sed -i 's/^\([[:space:]]*Stretch:BilinearFilter[[:space:]]*=\).*/\1 FALSE/' "$conf"
     sed -i 's/^\([[:space:]]*Vsync[[:space:]]*=\).*/\1 TRUE/' "$conf"
-    sed -i 's/^Lock .*/Lock          = TRUE/' "$conf"
-    log "snes9x conf: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, 4:3 aspect, vsync"
+    # Keep Lock=FALSE so snes9x can persist in-emulator changes (e.g. controller
+    # remaps done in Test Mode). Lock=TRUE makes the config read-only while running,
+    # which silently discards controller settings on exit. This line also repairs
+    # older installs that were left with Lock=TRUE.
+    sed -i 's/^Lock .*/Lock          = FALSE/' "$conf"
+    log "snes9x conf: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, vsync, config unlocked"
 }
 
 patch_flycast_hd_cfg() {

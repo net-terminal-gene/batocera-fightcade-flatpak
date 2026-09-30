@@ -517,6 +517,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+head_section "Lobby vertical (TATE)"
+# ---------------------------------------------------------------------------
+
+VERT_TOOL="${PROJECT_DIR}/fightcade-lobby-vertical"
+if [ -x "$VERT_TOOL" ]; then
+    pass "lobby-vertical tool installed: fightcade-lobby-vertical"
+    "$VERT_TOOL" status 2>/dev/null | while IFS= read -r line; do
+        info "$line"
+    done
+else
+    info "lobby-vertical tool not installed (re-run installer to add VERTICAL MODE)"
+fi
+
+# ---------------------------------------------------------------------------
 head_section "Dreamcast BIOS"
 # ---------------------------------------------------------------------------
 

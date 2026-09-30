@@ -37,6 +37,7 @@ LOCKFILE = "/tmp/fightcade-pad-mouse.lock"
 LOGFILE = "/tmp/pad-mouse.log"
 DISABLE = "/userdata/system/configs/fightcade-pad-mouse.disable"
 CONF = "/userdata/system/configs/fightcade-pad-mouse.conf"
+ES_CURSOR_OVERLAY = "/tmp/fightcade-cursor-speed.conf"
 CHAT_CONF = "/userdata/system/configs/fightcade-lobby-chat.conf"
 CHAT_CONF_LEGACY = "/userdata/system/configs/fightcade-pad-mouse-chat.conf"
 CHAT_CONF_SHIPPED = "/userdata/system/fightcade-flatpak/input/fightcade-lobby-chat.conf"
@@ -57,6 +58,11 @@ CRT_STATEFILE = "/tmp/fightcade-switchres-wrap.state"
 FLYCAST_PGREP_RE = r"flycast\.elf"
 FBNEO_PGREP_RE = r"fcadefbneo\.exe"
 SNES9X_PGREP_RE = r"fcadesnes9x\.exe"
+# Active snes9x config (symlinked from the app dir into writable app-data).
+SNES9X_CONF = (
+    "/userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade"
+    "/data/config/snes9x/fcadesnes9x.conf"
+)
 
 EV_KEY = 0x01
 EV_ABS = 0x03
@@ -162,10 +168,44 @@ def dlog(msg: str) -> None:
 
 def load_conf() -> dict:
     cfg = dict(DEFAULTS)
-    if not os.path.isfile(CONF):
-        return cfg
+    if os.path.isfile(CONF):
+        try:
+            with open(CONF, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key = key.strip().lower()
+                    val = val.strip()
+                    if key in ("max_speed", "slow_speed"):
+                        if key == "max_speed":
+                            cfg["max_speed_hd"] = float(val)
+                        else:
+                            cfg["slow_speed_hd"] = float(val)
+                        cfg[key] = float(val)
+                        continue
+                    if key in cfg:
+                        if isinstance(cfg[key], bool):
+                            cfg[key] = val.lower() in ("1", "true", "yes", "on")
+                        elif isinstance(cfg[key], int):
+                            cfg[key] = int(val)
+                        elif isinstance(cfg[key], float):
+                            cfg[key] = float(val)
+                        else:
+                            cfg[key] = val
+        except (OSError, ValueError) as exc:
+            log(f"config parse warning: {exc}")
+    _apply_es_cursor_overlay(cfg)
+    return cfg
+
+
+def _apply_es_cursor_overlay(cfg: dict) -> None:
+    """Apply Advanced Game Options cursor sliders written at gameStart."""
+    if not os.path.isfile(ES_CURSOR_OVERLAY):
+        return
     try:
-        with open(CONF, encoding="utf-8") as fh:
+        with open(ES_CURSOR_OVERLAY, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -173,25 +213,14 @@ def load_conf() -> dict:
                 key, val = line.split("=", 1)
                 key = key.strip().lower()
                 val = val.strip()
-                if key in ("max_speed", "slow_speed"):
-                    if key == "max_speed":
-                        cfg["max_speed_hd"] = float(val)
-                    else:
-                        cfg["slow_speed_hd"] = float(val)
-                    cfg[key] = float(val)
+                if key not in cfg:
                     continue
-                if key in cfg:
-                    if isinstance(cfg[key], bool):
-                        cfg[key] = val.lower() in ("1", "true", "yes", "on")
-                    elif isinstance(cfg[key], int):
-                        cfg[key] = int(val)
-                    elif isinstance(cfg[key], float):
-                        cfg[key] = float(val)
-                    else:
-                        cfg[key] = val
-    except (OSError, ValueError) as exc:
-        log(f"config parse warning: {exc}")
-    return cfg
+                try:
+                    cfg[key] = float(val)
+                except ValueError:
+                    continue
+    except OSError as exc:
+        log(f"cursor overlay warning: {exc}")
 
 
 def resolve_cursor_speeds(
@@ -317,7 +346,18 @@ def resolve_cursor_speeds(
 
 def menu_mode_active(session: "SessionState") -> bool:
     """True when navigating an emulator menu with the pad cursor (no xdotool)."""
-    return crt_paused() and not session.in_lobby
+    if session.in_lobby:
+        return False
+    if crt_paused():
+        return True
+    # Steam Deck / labwc Test Mode only (PC HD X11 keeps prior menu_mode rules).
+    if (
+        session.hd_windowed_emu
+        and not crt_switchres_active()
+        and is_wayland_session()
+    ):
+        return True
+    return False
 
 
 def _strip_chat_value(val: str) -> str:
@@ -888,23 +928,37 @@ class SessionState:
         self.focus_name = ""
         self.in_lobby = True
         self.emu_dialog_open = False
+        self.hd_windowed_emu = False
+        self._hd_fullscreen_streak = 0
+        # Throttle the (expensive) xdotool windowed-state re-check once a stable HD
+        # Test Mode window is established. Polling it every refresh (0.25s) forks
+        # xdotool on the single loop thread and hitches cursor motion; the windowed
+        # <-> fullscreen transition is rare, so ~1s latency to notice it is fine.
+        self._last_windowed_check = 0.0
 
     def _apply_process_scan(self, procs: dict[str, bool]) -> None:
+        prev_snes9x = self.snes9x_running
         self.fc_running = procs["fc"]
         self.fbneo_running = procs["fbneo"]
         self.snes9x_running = procs["snes9x"]
         self.flycast_running = procs["flycast"]
+        # snes9x just exited on Deck HD: it may have saved Fullscreen:Enabled=FALSE
+        # (from opening the in-game menu). Re-assert fullscreen in the now-written
+        # config so the next launch is not windowed. Controllers are left intact.
+        if prev_snes9x and not self.snes9x_running and wayland_hd_session():
+            normalize_snes9x_fullscreen()
 
     def refresh(self, display: str, force: bool = False) -> None:
+        if is_wayland_session() and not crt_switchres_active():
+            self._refresh_deck_hd(display, force)
+        else:
+            self._refresh_pc_legacy(display, force)
+
+    def _refresh_pc_legacy(self, display: str, force: bool = False) -> None:
+        """X11 / CRT PC: unchanged refresh (no Deck cursor work)."""
         now = time.monotonic()
         self.crt_paused = crt_paused()
 
-        # Menu open (paused). Keep this path cheap. The only state worth checking is
-        # whether the emulator quit while paused (stale pause flag), and that process
-        # scan (pgrep over every Wine process) is expensive under CPU load, so
-        # throttle it to lobby_refresh_sec. Running it (twice) every loop iteration
-        # starved the cursor/click loop and added seconds of input latency, which is
-        # what defeated double-tap detection.
         if self.crt_paused:
             self.in_lobby = False
             if force or now - self.last_lobby_refresh >= self.lobby_refresh_sec:
@@ -919,8 +973,6 @@ class SessionState:
                     clear_crt_pause()
                     self.crt_paused = False
             if self.crt_paused:
-                # Still paused: skip wmctrl/xdotool focus polling; it fights the
-                # 60Hz cursor.
                 return
 
         if not force and now - self.last_lobby_refresh < self.lobby_refresh_sec:
@@ -939,7 +991,6 @@ class SessionState:
         )
 
         if not need_game_state:
-            # Lobby only: pgrep at lobby_refresh_sec. No xdotool/wmctrl here.
             self.last_lobby_refresh = now
             self.in_lobby = True
             self.fbneo_active = False
@@ -954,7 +1005,6 @@ class SessionState:
         self.in_lobby = False
 
         if self.crt_paused:
-            # Menu open: skip wmctrl/xdotool focus polling; it fights the 60Hz cursor.
             return
 
         if self.fbneo_running or self.snes9x_running:
@@ -974,10 +1024,135 @@ class SessionState:
                     pass
         if not self.crt_paused:
             self.focus_name = read_focused_window_name(display)
-            # When the game window still holds focus, an emulator config dialog may
-            # be open behind it (cold-launch Map Game Inputs). Detect it so the pad
-            # pointer stays enabled; only check in that case to avoid extra xdotool
-            # calls during real gameplay.
+            prev_dialog = self.emu_dialog_open
+            if (self.fbneo_running or self.snes9x_running) and wine_menu_emu_in_focus(
+                self.focus_name
+            ):
+                self.emu_dialog_open = emu_dialog_present(display)
+            else:
+                self.emu_dialog_open = False
+            if self.emu_dialog_open != prev_dialog:
+                log(
+                    f"emu dialog {'open' if self.emu_dialog_open else 'closed'}: "
+                    f"pointer {'enabled' if self.emu_dialog_open else 'gated'} "
+                    f"while game window focused (focus=[{self.focus_name}])"
+                )
+
+    def _refresh_deck_hd(self, display: str, force: bool = False) -> None:
+        """Steam Deck / labwc HD only."""
+        now = time.monotonic()
+        self.crt_paused = crt_paused()
+
+        if self.crt_paused:
+            self.in_lobby = False
+            if force or now - self.last_lobby_refresh >= self.lobby_refresh_sec:
+                self.last_lobby_refresh = now
+                procs = scan_fightcade_processes()
+                self._apply_process_scan(procs)
+                if (
+                    not procs["snes9x"]
+                    and not procs["fbneo"]
+                    and not os.path.isfile(FLYCAST_GAME_FLAG)
+                ):
+                    clear_crt_pause()
+                    self.crt_paused = False
+            if self.crt_paused:
+                return
+
+        if not force and now - self.last_lobby_refresh < self.lobby_refresh_sec:
+            if self.in_lobby and not self.crt_paused:
+                if (
+                    not self.fbneo_running
+                    and not self.snes9x_running
+                    and not self.flycast_running
+                ):
+                    return
+
+        if not force and now - self.last_refresh < self.refresh_sec:
+            if self.in_lobby and self.hd_windowed_emu:
+                self.in_lobby = False
+            if self.fc_running:
+                return
+            if now - self.last_refresh < 0.5:
+                return
+
+        procs = scan_fightcade_processes()
+        self._apply_process_scan(procs)
+        need_game_state = (
+            self.crt_paused
+            or procs["fbneo"]
+            or procs["snes9x"]
+            or procs["flycast"]
+            or os.path.isfile(FLYCAST_GAME_FLAG)
+            or os.path.isfile(FBNEO_FLAG)
+        )
+
+        if not need_game_state:
+            self.last_lobby_refresh = now
+            self.in_lobby = True
+            self.fbneo_active = False
+            self.flycast_game_active = False
+            self.focus_name = ""
+            if not self.fc_running:
+                self.hd_windowed_emu = False
+                self._hd_fullscreen_streak = 0
+            return
+
+        self.last_refresh = now
+        self.last_lobby_refresh = now
+        self.in_lobby = False
+
+        if self.crt_paused:
+            return
+
+        if self.fbneo_running or self.snes9x_running:
+            self.fbneo_active = fightcade_fbneo_active()
+        else:
+            self.fbneo_active = False
+        if os.path.isfile(FLYCAST_GAME_FLAG):
+            self.flycast_game_active = True
+        elif procs["flycast"]:
+            self.flycast_game_active = flycast_window_has_game(display)
+        else:
+            self.flycast_game_active = False
+            if os.path.isfile(FLYCAST_GAME_FLAG):
+                try:
+                    os.remove(FLYCAST_GAME_FLAG)
+                except OSError:
+                    pass
+        if not self.crt_paused:
+            hd_mode = not crt_switchres_active() and not crt_cursor_profile(display)
+            if (self.fbneo_running or self.snes9x_running) and hd_mode:
+                if self.hd_windowed_emu:
+                    # Steady-state Test Mode window: only re-run the xdotool windowed
+                    # check ~1x/sec so cursor motion (same thread) does not hitch
+                    # every 0.25s. Between checks, keep the current windowed state.
+                    if now - self._last_windowed_check < 1.0:
+                        return
+                    self._last_windowed_check = now
+                    if not wine_emu_window_is_windowed(display):
+                        self._hd_fullscreen_streak += 1
+                        if self._hd_fullscreen_streak >= 2:
+                            dlog("hd_windowed_emu=0 (HD fullscreen)")
+                            self.hd_windowed_emu = False
+                            self._hd_fullscreen_streak = 0
+                    else:
+                        self._hd_fullscreen_streak = 0
+                    return
+                windowed_now = wine_emu_window_is_windowed(display)
+                if windowed_now:
+                    if not self.hd_windowed_emu:
+                        dlog("hd_windowed_emu=1 (HD Test Mode window)")
+                    self.hd_windowed_emu = True
+                    self._hd_fullscreen_streak = 0
+                    return
+                self._hd_fullscreen_streak += 1
+                if self._hd_fullscreen_streak >= 2:
+                    self.hd_windowed_emu = False
+            else:
+                self.hd_windowed_emu = False
+                self._hd_fullscreen_streak = 0
+            self.focus_name = read_focused_window_name(display)
             prev_dialog = self.emu_dialog_open
             if (self.fbneo_running or self.snes9x_running) and wine_menu_emu_in_focus(
                 self.focus_name
@@ -999,9 +1174,14 @@ class SessionState:
             return False
         if self.crt_paused:
             return True
+        if (
+            self.hd_windowed_emu
+            and is_wayland_session()
+            and not crt_switchres_active()
+        ):
+            return True
         if wine_menu_emu_in_focus(self.focus_name):
-            # Game window has focus. Allow the pointer only when a config dialog is
-            # actually open behind it, so the user can click it without Alt+Tab.
+            # Exclusive fullscreen gameplay: pointer only for config dialogs (CRT/PC).
             return self.emu_dialog_open
         return True
 
@@ -1041,6 +1221,120 @@ def is_wayland_session() -> bool:
         except OSError:
             pass
     return False
+
+
+def xdotool_display_size(display: str) -> tuple[int, int]:
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        out = subprocess.run(
+            ["xdotool", "getdisplaygeometry"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode == 0:
+            parts = out.stdout.split()
+            if len(parts) >= 2:
+                return int(parts[0]), int(parts[1])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return 0, 0
+
+
+def wine_emu_window_is_windowed(display: str) -> bool:
+    """True on HD when FBNeo/Snes9x is not covering the desktop (Test Mode window)."""
+    if crt_switchres_active() or crt_cursor_profile(display):
+        return False
+    if fightcade_fbneo_running():
+        pattern = "FBNeo"
+    elif fightcade_snes9x_running():
+        pattern = "Snes9x"
+    else:
+        return False
+    wid = xdotool_first_window_by_name(display, pattern)
+    if not wid:
+        return True
+    _x, _y, gw, gh = xdotool_window_geometry(display, wid)
+    sw, sh = xdotool_display_size(display)
+    if gw <= 0 or gh <= 0 or sw <= 0 or sh <= 0:
+        return True
+    return gw < sw - 48 or gh < sh - 80
+
+
+def wayland_pointer_to_wine_emu(display: str) -> bool:
+    """Move labwc seat pointer onto FBNeo/Snes9x (HD Test Mode on Steam Deck)."""
+    if not is_wayland_session():
+        return False
+    if fightcade_fbneo_running():
+        pattern = "FBNeo"
+    elif fightcade_snes9x_running():
+        pattern = "Snes9x"
+    else:
+        return False
+    wid = xdotool_first_window_by_name(display, pattern)
+    if not wid:
+        return False
+    gx, gy, gw, gh = xdotool_window_geometry(display, wid)
+    if gw <= 0 or gh <= 0:
+        return False
+    px, py = pointer_xy(display)
+    cx = gx + gw // 2
+    cy = gy + gh // 2
+    dx, dy = cx - px, cy - py
+    if dx == 0 and dy == 0:
+        return True
+    env = os.environ.copy()
+    if not env.get("WAYLAND_DISPLAY"):
+        env["WAYLAND_DISPLAY"] = "wayland-0"
+    if not env.get("XDG_RUNTIME_DIR"):
+        env["XDG_RUNTIME_DIR"] = "/var/run"
+    try:
+        subprocess.run(
+            ["wlrctl", "pointer", "move", str(dx), str(dy)],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def pointer_to_wine_emu(display: str) -> bool:
+    """Place the pointer on the Wine emu window (HD Test Mode)."""
+    if is_wayland_session():
+        return wayland_pointer_to_wine_emu(display)
+    if fightcade_fbneo_running():
+        pattern = "FBNeo"
+    elif fightcade_snes9x_running():
+        pattern = "Snes9x"
+    else:
+        return False
+    wid = xdotool_first_window_by_name(display, pattern)
+    if not wid:
+        return False
+    gx, gy, gw, gh = xdotool_window_geometry(display, wid)
+    if gw <= 0 or gh <= 0:
+        return False
+    cx = gx + gw // 2
+    cy = gy + gh // 2
+    env = {**os.environ, "DISPLAY": display}
+    try:
+        subprocess.run(
+            ["xdotool", "mousemove", "--sync", str(cx), str(cy)],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 class UinputMouse:
@@ -1816,7 +2110,18 @@ def alt_tab_allowed(session: SessionState, allow_mouse: bool) -> bool:
 
 def alt_f4_allowed(session: SessionState) -> bool:
     """Quit emulator (Alt+F4) only while a game session is active, not in the lobby."""
-    if not session.fc_running or session.in_lobby:
+    if not session.fc_running:
+        return False
+    if is_wayland_session() and not crt_switchres_active():
+        if session.in_lobby and not session.hd_windowed_emu:
+            return False
+        return (
+            session.fbneo_running
+            or session.snes9x_running
+            or session.flycast_game_active
+            or session.hd_windowed_emu
+        )
+    if session.in_lobby:
         return False
     return (
         session.fbneo_running
@@ -2104,6 +2409,29 @@ def send_alt_f4(xdotool: XdotoolClient) -> None:
     xdotool.key("Alt_L+F4")
 
 
+def force_cursor_show(display: str) -> None:
+    """Always re-enable the cursor, even on Wayland HD (ShowCursor does not warp).
+
+    Used after SELECT+Start quits a fullscreen emulator: returning to the lobby
+    must restore the pointer that the game hid.
+    """
+    if not os.path.isfile(CURSOR_CTL) or not os.access(CURSOR_CTL, os.X_OK):
+        return
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    try:
+        subprocess.run(
+            [CURSOR_CTL, "show"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def _fightcade_window_id(display: str) -> str:
     env = os.environ.copy()
     env["DISPLAY"] = display
@@ -2169,7 +2497,54 @@ def lobby_chat_button_state(
     }
 
 
-def set_cursor_visible(visible: bool, display: str) -> None:
+def wayland_hd_session() -> bool:
+    """Steam Deck / labwc Fightcade HD: never fightcade-cursor hide (warps pointer)."""
+    return is_wayland_session() and not crt_switchres_active()
+
+
+def normalize_snes9x_fullscreen() -> None:
+    """Re-assert fullscreen in the snes9x config after it exits (Deck HD).
+
+    Opening the in-game menu (SELECT+WEST) drops snes9x out of emulated
+    fullscreen so the menu bar can show. The config is now unlocked (Lock=FALSE)
+    so controller remaps persist, but that also means snes9x writes
+    Fullscreen:Enabled=FALSE on exit, leaving the next launch windowed. Force the
+    display/fullscreen keys back to TRUE. Only the [Display\\Win] keys are
+    touched; [Controls] (the user's saved bindings) is never modified.
+    """
+    force_true = ("Fullscreen:Enabled", "Fullscreen:EmulateFullscreen", "HideMenu")
+    try:
+        with open(SNES9X_CONF, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    changed = False
+    for i, line in enumerate(lines):
+        for key in force_true:
+            m = re.match(
+                r"^(\s*" + re.escape(key) + r"\s*=\s*)(\S+)(.*)$", line
+            )
+            if m and m.group(2) != "TRUE":
+                lines[i] = f"{m.group(1)}TRUE{m.group(3)}\n"
+                changed = True
+            if m:
+                break
+    if not changed:
+        return
+    try:
+        tmp = SNES9X_CONF + ".padmouse.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        os.replace(tmp, SNES9X_CONF)
+        log("normalized snes9x fullscreen after exit")
+    except OSError as exc:
+        log(f"snes9x fullscreen normalize failed: {exc}")
+
+
+def set_cursor_visible(visible: bool, display: str, *, hd_windowed: bool = False) -> None:
+    # labwc HD: uinput drives the seat pointer; ShowCursor/HideCursor warps and loops.
+    if wayland_hd_session():
+        return
     if not os.path.isfile(CURSOR_CTL) or not os.access(CURSOR_CTL, os.X_OK):
         return
     cmd = "show" if visible else "hide"
@@ -2186,6 +2561,13 @@ def set_cursor_visible(visible: bool, display: str) -> None:
         )
     except (OSError, subprocess.SubprocessError):
         pass
+
+
+def hd_compositor_cursor_managed(session: SessionState, display: str) -> bool:
+    """Wayland HD Test Mode (windowed): do not hide/warp the compositor cursor."""
+    if not is_wayland_session() or crt_switchres_active():
+        return True
+    return not session.hd_windowed_emu
 
 
 def drain_evdev(
@@ -2331,6 +2713,8 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     keys_by_pad: dict[str, dict[int, int]] = {}
     bindings_by_pad: dict[str, PadBindings] = {}
     pad_activity: dict[str, float] = {}
+    frac_x = 0.0
+    frac_y = 0.0
 
     labels = ", ".join(p[0] for p in pads)
     log(
@@ -2432,13 +2816,45 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     dbl_tap_slack = 18
     last_menu_click_at = 0.0
     last_menu_click_pos = (0, 0)
+    hd_test_pointer_placed = False
 
     try:
         while True:
+            now = time.time()
+            deck_hd = wayland_hd_session()
             session.refresh(display)
             if not crt_paused():
                 emu_menu_open = False
-            if os.path.isfile(DISABLE) or not session.fc_running:
+            if os.path.isfile(DISABLE):
+                if left_held:
+                    set_mouse_button(False, xdotool, 1)
+                    left_held = False
+                    left_autoreleased = False
+                if right_held:
+                    set_mouse_button(False, xdotool, 3)
+                    right_held = False
+                    right_autoreleased = False
+                if not cursor_visible:
+                    set_cursor_visible(True, display)
+                    cursor_visible = True
+                time.sleep(0.5)
+                continue
+            if deck_hd:
+                if not session.fc_running and not session.in_lobby:
+                    if left_held:
+                        set_mouse_button(False, xdotool, 1)
+                        left_held = False
+                        left_autoreleased = False
+                    if right_held:
+                        set_mouse_button(False, xdotool, 3)
+                        right_held = False
+                        right_autoreleased = False
+                    if not cursor_visible:
+                        set_cursor_visible(True, display)
+                        cursor_visible = True
+                    time.sleep(0.5)
+                    continue
+            elif not session.fc_running:
                 if left_held:
                     set_mouse_button(False, xdotool, 1)
                     left_held = False
@@ -2463,7 +2879,16 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             else:
                 allow_mouse = session.lobby_mouse_allowed()
                 allow_click = allow_mouse
-            if not session.in_lobby:
+            if wayland_hd_session() and session.hd_windowed_emu:
+                if not hd_test_pointer_placed:
+                    if pointer_to_wine_emu(display):
+                        dlog("hd_windowed: one-time pointer on emu (Test Mode)")
+                    hd_test_pointer_placed = True
+                cursor_visible = True
+            elif wayland_hd_session():
+                hd_test_pointer_placed = False
+                cursor_visible = True
+            elif not session.in_lobby:
                 want_cursor = allow_mouse
                 if want_cursor != cursor_visible:
                     set_cursor_visible(want_cursor, display)
@@ -2555,7 +2980,6 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             left_down = key_down(key_state, bind.btn_left)
             right_down = key_down(key_state, bind.btn_right)
             chat_modifier_down = r1_down and not select_down
-            now = time.time()
             menu_mode = menu_mode_active(session)
 
             if allow_click:
@@ -2670,7 +3094,9 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     )
 
             if session.in_lobby and now - last_pointer_rescan >= pointer_rescan_sec:
-                disable_fake_touchpad_pointers(display)
+                # X11 only: xinput phantom pointers. On labwc HD, uinput is the pointer.
+                if not wayland_hd_session():
+                    disable_fake_touchpad_pointers(display)
                 last_pointer_rescan = now
 
             pause_active = select_down and key_down(key_state, bind.btn_combo_west)
@@ -2691,7 +3117,10 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
                     if hd_snes:
-                        snes_open = not crt_paused()
+                        # HD Deck: SELECT+WEST must ALWAYS open the menu, never a
+                        # toggle gated on the crt_paused() flag (which can desync
+                        # across relaunches and make the combo feel reversed).
+                        snes_open = True
                     else:
                         snes_open = (
                             not session.crt_paused
@@ -2706,7 +3135,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                         allow_mouse = session.lobby_mouse_allowed()
                         allow_click = allow_mouse
                         last_pause_at = now
-                        set_cursor_visible(True, display)
+                        set_cursor_visible(True, display, hd_windowed=session.hd_windowed_emu)
                         cursor_visible = True
                         log("SELECT+WEST opened Snes9x menu")
                 elif (
@@ -2717,11 +3146,13 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 ):
                     emu_menu_open = True
                     trigger_crt_esc_pause()
+                    if is_wayland_session() and not crt_switchres_active():
+                        focus_wine_menu_emulator(display)
                     session.refresh(display, force=True)
                     allow_mouse = session.lobby_mouse_allowed()
                     allow_click = allow_mouse
                     last_pause_at = now
-                    set_cursor_visible(True, display)
+                    set_cursor_visible(True, display, hd_windowed=session.hd_windowed_emu)
                     cursor_visible = True
                     log("SELECT+WEST opened emulator menu (ESC)")
             pause_combo_was_active = pause_active
@@ -2744,7 +3175,9 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 if fightcade_snes9x_running():
                     hd_snes = not crt_switchres_active()
                     if hd_snes:
-                        snes_close = crt_paused()
+                        # HD Deck: SELECT+NORTH must ALWAYS close the menu and go
+                        # back to fullscreen, regardless of the crt_paused() flag.
+                        snes_close = True
                     else:
                         snes_close = crt_paused()
                     if snes_close:
@@ -2754,7 +3187,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                         allow_mouse = session.lobby_mouse_allowed()
                         allow_click = allow_mouse
                         last_resume_at = now
-                        set_cursor_visible(False, display)
+                        set_cursor_visible(False, display, hd_windowed=session.hd_windowed_emu)
                         cursor_visible = False
                         log("SELECT+NORTH closed Snes9x menu")
                 elif session.fbneo_combo_available():
@@ -2774,9 +3207,9 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             r2_down = r2_active(bind, key_state, active_axes, active_caps)
 
             modifier_edge = modifier_down and not select_modifier_was_down
-            select_modifier_was_down = modifier_down
-            select_was_down = select_down
-            r1_edge = r1_down and not r1_was_down
+            select_edge = select_down and not select_was_down
+            start_edge = start_down and not start_was_down
+            west_down = key_down(key_state, bind.btn_combo_west)
 
             allow_tab = alt_tab_allowed(session, allow_mouse)
             if (
@@ -2790,7 +3223,22 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                 last_tab_at = now
                 log("SELECT+R1 sent Alt+Tab")
 
-            if (
+            if wayland_hd_session() and (
+                alt_f4_allowed(session)
+                and select_down
+                and start_down
+                and not west_down
+                and (select_edge or start_edge)
+                and now - last_alt_f4_at >= combo_cooldown
+            ):
+                if fightcade_fbneo_running() or fightcade_snes9x_running():
+                    focus_wine_menu_emulator(display)
+                send_alt_f4(xdotool)
+                last_alt_f4_at = now
+                force_cursor_show(display)
+                cursor_visible = True
+                log("SELECT+Start sent Alt+F4 (cursor restored)")
+            elif not wayland_hd_session() and (
                 alt_f4_allowed(session)
                 and modifier_down
                 and start_down
@@ -2799,8 +3247,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
             ):
                 send_alt_f4(xdotool)
                 last_alt_f4_at = now
-                log("SELECT+Start sent Alt+F4")
+                force_cursor_show(display)
+                cursor_visible = True
+                log("SELECT+Start sent Alt+F4 (cursor restored)")
+
+            select_modifier_was_down = modifier_down
+            select_was_down = select_down
             start_was_down = start_down
+            r1_edge = r1_down and not r1_was_down
 
             if session.in_lobby and chat_modifier_down:
                 chat_macros = load_chat_macros()
@@ -2861,33 +3315,59 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     drag_mode=use_drag_speeds,
                 )
                 move_speed = slow_speed if fine_nudge else max_speed
-                dx = int(round(nx * move_speed))
-                dy = int(round(ny * move_speed))
-                hx = hat_to_step(axes.get(bind.abs_hat_x, 0))
-                hy = hat_to_step(axes.get(bind.abs_hat_y, 0))
-                # D-pad reported as buttons (Steam Deck, arcade encoders). Inert for
-                # hat/analog-only pads: those never emit BTN_DPAD_* so these are all
-                # false and hx/hy stay whatever the hat axis produced.
-                if key_down(key_state, bind.btn_dpad_left):
-                    hx -= 1
-                if key_down(key_state, bind.btn_dpad_right):
-                    hx += 1
-                if key_down(key_state, bind.btn_dpad_up):
-                    hy -= 1
-                if key_down(key_state, bind.btn_dpad_down):
-                    hy += 1
-                hx = max(-1, min(1, hx))
-                hy = max(-1, min(1, hy))
-                step = int(round(move_speed))
-                if hx:
-                    dx += hx * step
-                if hy:
-                    dy += hy * step
+                if deck_hd:
+                    if move_speed < 0.25:
+                        move_speed = 0.25
+                    frac_x += nx * move_speed
+                    frac_y += ny * move_speed
+                    hx = hat_to_step(axes.get(bind.abs_hat_x, 0))
+                    hy = hat_to_step(axes.get(bind.abs_hat_y, 0))
+                    if key_down(key_state, bind.btn_dpad_left):
+                        hx -= 1
+                    if key_down(key_state, bind.btn_dpad_right):
+                        hx += 1
+                    if key_down(key_state, bind.btn_dpad_up):
+                        hy -= 1
+                    if key_down(key_state, bind.btn_dpad_down):
+                        hy += 1
+                    hx = max(-1, min(1, hx))
+                    hy = max(-1, min(1, hy))
+                    if hx:
+                        frac_x += hx * move_speed
+                    if hy:
+                        frac_y += hy * move_speed
+                    dx = int(frac_x)
+                    dy = int(frac_y)
+                    frac_x -= dx
+                    frac_y -= dy
+                else:
+                    hx = hat_to_step(axes.get(bind.abs_hat_x, 0))
+                    hy = hat_to_step(axes.get(bind.abs_hat_y, 0))
+                    if key_down(key_state, bind.btn_dpad_left):
+                        hx -= 1
+                    if key_down(key_state, bind.btn_dpad_right):
+                        hx += 1
+                    if key_down(key_state, bind.btn_dpad_up):
+                        hy -= 1
+                    if key_down(key_state, bind.btn_dpad_down):
+                        hy += 1
+                    hx = max(-1, min(1, hx))
+                    hy = max(-1, min(1, hy))
+                    dx = int(round(nx * move_speed))
+                    dy = int(round(ny * move_speed))
+                    step = int(round(move_speed))
+                    if hx:
+                        dx += hx * step
+                    if hy:
+                        dy += hy * step
                 # Hold the cursor still briefly after a menu click so a rapid second
                 # tap double-clicks the same pixel instead of drifting off-target.
                 if now < menu_click_freeze_until:
                     dx = 0
                     dy = 0
+                    if deck_hd:
+                        frac_x = 0.0
+                        frac_y = 0.0
                 move_mouse(dx, dy, xdotool)
     finally:
         if left_held:

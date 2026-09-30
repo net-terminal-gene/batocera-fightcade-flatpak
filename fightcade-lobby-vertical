@@ -1,0 +1,130 @@
+#!/bin/bash
+# Apply or remove Fightcade vertical/TATE lobby injection before launch.
+#
+# The per-game Advanced Game Options switch writes:
+#   flatpak["Fightcade.flatpak"].fcvertical = 1   (ON)
+#   flatpak["Fightcade.flatpak"].fcvertical =     (OFF / empty / key removed)
+#
+# apply  (gameStart, before Fightcade launches): copy Nativefier inject files
+#        into the Flatpak app when the switch is ON, or remove them when OFF.
+# status: print whether the switch is on and whether inject files are present.
+
+set -uo pipefail
+
+APP_ID="com.fightcade.Fightcade"
+PROJECT_DIR="/userdata/system/fightcade-flatpak"
+SRC_DIR="${PROJECT_DIR}/lobby"
+PRELOAD_MARKER='if (document.readyState !== "loading") { injectScripts(); }'
+
+log() { printf 'fightcade-lobby-vertical: %s\n' "$*"; }
+
+vertical_enabled() {
+    local v
+    v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcvertical' 2>/dev/null | tr -d '[:space:]')
+    [ "$v" = "1" ]
+}
+
+app_dir() {
+    local deploy
+    deploy=$(flatpak info --system --show-location "${APP_ID}" 2>/dev/null) || return 1
+    printf '%s\n' "${deploy}/files/fightcade/Fightcade/fc2-electron/resources/app"
+}
+
+patch_nativefier() {
+    local nativefier="$1" vertical="$2"
+    [ -f "$nativefier" ] || return 0
+    VERT="$vertical" FILE="$nativefier" python3 - <<'PY'
+import json, os, sys
+path = os.environ["FILE"]
+vertical = os.environ["VERT"] == "1"
+try:
+    data = json.loads(open(path, encoding="utf-8").read())
+except Exception as e:
+    sys.stderr.write("nativefier.json: %s\n" % e)
+    sys.exit(0)
+# Vertical mode draws its own HTML menu. Hide the unrotated GTK bar and the
+# tray (tray click would show the window again after Close).
+want_menu = not vertical
+want_tray = not vertical
+if data.get("showMenuBar") is want_menu and data.get("tray") is want_tray:
+    sys.exit(0)
+data["showMenuBar"] = want_menu
+data["tray"] = want_tray
+open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2) + "\n")
+PY
+}
+
+ensure_preload_patch() {
+    local preload="$1"
+    [ -f "$preload" ] || return 0
+    FILE="$preload" MARKER="$PRELOAD_MARKER" python3 - <<'PY'
+import os
+path = os.environ["FILE"]
+marker = os.environ["MARKER"]
+text = open(path, encoding="utf-8").read()
+if marker in text:
+    raise SystemExit(0)
+needle = "//# sourceMappingURL=preload.js.map"
+if needle in text:
+    text = text.replace(needle, marker + "\n" + needle, 1)
+else:
+    text = text.rstrip() + "\n" + marker + "\n"
+open(path, "w", encoding="utf-8").write(text)
+PY
+}
+
+enable_vertical() {
+    local app inj
+    app=$(app_dir) || { log "Fightcade Flatpak app dir not found"; return 1; }
+    inj="${app}/inject"
+    mkdir -p "$inj"
+    [ -f "${SRC_DIR}/inject.js" ] && [ -f "${SRC_DIR}/inject.css" ] || {
+        log "missing ${SRC_DIR}/inject.js or inject.css"
+        return 1
+    }
+    install -m 0644 "${SRC_DIR}/inject.js" "${inj}/inject.js"
+    install -m 0644 "${SRC_DIR}/inject.css" "${inj}/inject.css"
+    patch_nativefier "${app}/nativefier.json" 1
+    ensure_preload_patch "${app}/lib/preload.js"
+    log "enabled (inject + rotated HTML menu)"
+}
+
+disable_vertical() {
+    local app inj
+    app=$(app_dir) || { log "Fightcade Flatpak app dir not found"; return 0; }
+    inj="${app}/inject"
+    rm -f "${inj}/inject.js" "${inj}/inject.css"
+    patch_nativefier "${app}/nativefier.json" 0
+    log "disabled (stock landscape lobby)"
+}
+
+cmd_status() {
+    local app inj on="off"
+    vertical_enabled && on="on"
+    printf 'switch: %s\n' "$on"
+    app=$(app_dir) || { printf 'app: not found\n'; return 0; }
+    inj="${app}/inject"
+    printf 'app: %s\n' "$app"
+    if [ -f "${inj}/inject.js" ] && [ -f "${inj}/inject.css" ]; then
+        printf 'inject: present\n'
+    else
+        printf 'inject: absent\n'
+    fi
+}
+
+cmd_apply() {
+    if vertical_enabled; then
+        enable_vertical
+    else
+        disable_vertical
+    fi
+}
+
+case "${1:-}" in
+    apply)  cmd_apply ;;
+    status) cmd_status ;;
+    *)
+        printf 'Usage: fightcade-lobby-vertical apply|status\n' >&2
+        exit 2
+        ;;
+esac

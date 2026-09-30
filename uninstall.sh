@@ -19,6 +19,16 @@
 
 set -eu
 
+REPO="net-terminal-gene/batocera-fightcade-flatpak"
+# curl | bash puts this script on bash's stdin. When flatpak's progress UI reads
+# that same stdin it swallows the rest of the not-yet-read script, so bash resumes
+# mid-command and dies with a syntax error, aborting the uninstall partway (right
+# after the Flatpak app is removed). See bootstrap_off_pipe_if_needed: re-exec from
+# a temp file so nothing can truncate the script. --branch / FIGHTCADE_FLATPAK_BRANCH
+# selects which ref to re-fetch from (default main; uninstall logic is ref-agnostic).
+BRANCH="${FIGHTCADE_FLATPAK_BRANCH:-main}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+
 APP_ID="com.fightcade.Fightcade"
 PROJECT_DIR="/userdata/system/fightcade-flatpak"
 SCRIPTS_DIR="/userdata/system/scripts"
@@ -33,12 +43,18 @@ LOGS_DIR="/userdata/system/logs"
 CONFIGS_DIR="/userdata/system/configs"
 
 AUTO_YES=0
+BRANCH_FROM_ARGS=""
 
 info()   { printf '%s\n'       "$*"; }
 ok()     { printf '[ OK ] %s\n' "$*"; }
 notice() { printf '[INFO] %s\n' "$*"; }
 warn()   { printf '[WARN] %s\n' "$*"; }
 fail()   { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+
+set_branch() {
+    BRANCH="$1"
+    RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+}
 
 usage() {
     cat <<USAGE
@@ -48,19 +64,30 @@ Completely removes Fightcade and all related files.
 Your ROM files and BIOS are never touched.
 
 Options:
-  -y, --yes    Accept all prompts automatically.
-  -h, --help   Show this help.
+  -y, --yes        Accept all prompts automatically.
+      --branch REF Re-fetch ref for the pipe bootstrap (maintainer use; default main).
+  -h, --help       Show this help.
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -y|--yes) AUTO_YES=1 ;;
+        --branch)
+            [ "$#" -ge 2 ] || fail "--branch requires a branch or tag name"
+            BRANCH_FROM_ARGS="$2"
+            shift
+            ;;
         -h|--help) usage; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
     shift
 done
+
+# --branch wins over the environment default set above.
+if [ -n "${BRANCH_FROM_ARGS}" ]; then
+    set_branch "${BRANCH_FROM_ARGS}"
+fi
 
 ask_yes_no() {
     local prompt="$1"
@@ -91,6 +118,42 @@ ask_yes_no() {
         *)           return 1 ;;
     esac
 }
+
+# True when running from a real on-disk checkout (installed scripts), where the
+# script is a file (not a pipe) and flatpak cannot truncate it.
+is_local_source() {
+    [ -n "${BASH_SOURCE[0]:-}" ] && \
+    [ -f "${BASH_SOURCE[0]}" ] && \
+    [ -f "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/install.sh" ]
+}
+
+# When invoked as `curl ... | bash`, re-download this script to a temp file and
+# re-exec from disk so flatpak's stdin reads cannot swallow the rest of the
+# script. Mirrors install.sh's bootstrap. Safe no-op for local runs and after the
+# first re-exec.
+bootstrap_off_pipe_if_needed() {
+    [ -n "${FIGHTCADE_UNINSTALL_BOOTSTRAPPED:-}" ] && return 0
+    is_local_source && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local bootstrap
+    bootstrap=$(mktemp /tmp/fightcade-flatpak-uninstall.XXXXXX.sh) || return 0
+    notice "Bootstrapping uninstaller from ${RAW_BASE}/uninstall.sh"
+    if ! curl -fsSL --retry 3 --connect-timeout 15 \
+            "${RAW_BASE}/uninstall.sh" -o "${bootstrap}"; then
+        warn "Could not re-download uninstall.sh; continuing on the pipe."
+        rm -f "${bootstrap}"
+        return 0
+    fi
+    chmod +x "${bootstrap}"
+    export FIGHTCADE_UNINSTALL_BOOTSTRAPPED=1
+    export FIGHTCADE_FLATPAK_BRANCH="${BRANCH}"
+    local reexec_args=()
+    [ "${AUTO_YES}" -eq 1 ] && reexec_args+=(-y)
+    exec bash "${bootstrap}" "${reexec_args[@]}"
+}
+
+bootstrap_off_pipe_if_needed
 
 printf '%s\n' '------------------------------------------------------------'
 printf '%s\n' ' Fightcade Flatpak Complete Removal'
@@ -353,14 +416,39 @@ rm -f "${LOGS_DIR}"/fightcade-*.log \
       "${CONFIGS_DIR}"/fightcade-*.conf
 ok "Removed Fightcade logs and configs"
 
-# Additive ES feature file (the Debug Logging toggle). Removing it drops the
-# toggle from Advanced Game Options on the next ES restart.
+# Additive ES feature file (Debug Logging, Vertical Mode, lobby chat). Removing
+# it drops those controls from Advanced Game Options on the next ES restart.
 rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg"
 ok "Removed ES Debug toggle feature file"
 
+# Per-game Fightcade keys written to batocera.conf (videomode, fclobby_*,
+# fccursor_*, fcdebug, fcvertical). Delete every flatpak["Fightcade.flatpak"].*
+# line so no Fightcade setting survives. Real ROM/BIOS keys are untouched.
+BCONF="/userdata/system/batocera.conf"
+if [ -f "${BCONF}" ] && grep -q 'flatpak\["Fightcade.flatpak"\]\.' "${BCONF}" 2>/dev/null; then
+    sed -i '/^flatpak\["Fightcade\.flatpak"\]\./d' "${BCONF}"
+    ok "Removed Fightcade keys from ${BCONF}"
+else
+    notice "No Fightcade keys in batocera.conf"
+fi
+
+# ES per-game recovery/metadata node for the Fightcade flatpak entry.
+rm -f "${CONFIGS_DIR}/emulationstation/recovery/flatpak/Fightcade.xml"
+rmdir "${CONFIGS_DIR}/emulationstation/recovery/flatpak" 2>/dev/null || true
+ok "Removed ES recovery entry for Fightcade"
+
+# Orphan labwc rc.xml backup left by older fightcade-cursor versions (current
+# versions never edit rc.xml). Only the Fightcade-suffixed backup is removed.
+rm -f "/userdata/system/.config/labwc/rc.xml.bak.fightcade-cursor"
+
+# Transient runtime files (flags, logs, pidfiles, state). /tmp is tmpfs so these
+# clear on reboot, but sweep them now for an immediate clean state.
+rm -f /tmp/fightcade-* /tmp/pad-mouse.log 2>/dev/null || true
+ok "Removed transient Fightcade runtime files"
+
 # CLI tool symlinks in /usr/bin.
 for tool in fightcade-pad-mouse fightcade-cursor fightcade-lobby-zoom \
-            fightcade-diagnose fightcade-collect-logs; do
+            fightcade-lobby-vertical fightcade-diagnose fightcade-collect-logs; do
     [ -L "/usr/bin/${tool}" ] && rm -f "/usr/bin/${tool}"
 done
 

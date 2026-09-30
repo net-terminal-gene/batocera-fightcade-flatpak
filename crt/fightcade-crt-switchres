@@ -421,7 +421,8 @@ hd_pause_snes9x_menu() {
 
 hd_resume_snes9x_menu() {
     local mw mh
-    crt_is_paused || return 0
+    # SELECT+NORTH on HD must ALWAYS close the menu and return to fullscreen, even
+    # if the crt_paused() flag desynced, so do not early-return on pause state.
     read -r mw mh <<< "$(hd_display_pixels)"
     fightcade_wine_emu_send_key snes9x Escape
     sleep 0.1
@@ -1100,6 +1101,102 @@ fightcade_wine_emu_send_key() {
     [ -n "$wid" ] && DISPLAY="$disp" xdotool key --window "$wid" "$key" 2>/dev/null || true
 }
 
+# Steam Deck / labwc: pad cursor is uinput. Windowed Xwayland FBNeo never sees it
+# until the game covers the screen. CRT/Xorg PCs keep xdotool and stay unchanged.
+fightcade_wayland_session() {
+    [ -n "${WAYLAND_DISPLAY:-}" ] && return 0
+    local base name
+    for base in "${XDG_RUNTIME_DIR:-}" /run /var/run; do
+        [ -n "$base" ] && [ -d "$base" ] || continue
+        for name in "$base"/wayland-*; do
+            [ -e "$name" ] || continue
+            case "$name" in *.lock) continue ;; esac
+            return 0
+        done
+    done
+    return 1
+}
+
+fightcade_wayland_ensure_env() {
+    [ -n "${WAYLAND_DISPLAY:-}" ] || export WAYLAND_DISPLAY=wayland-0
+    [ -n "${XDG_RUNTIME_DIR:-}" ] || export XDG_RUNTIME_DIR=/var/run
+}
+
+# labwc: uinput/xdotool cannot warp. wlrctl can. Put the seat pointer on the emu.
+fightcade_wayland_pointer_to_window() {
+    local wid="$1" disp="$2"
+    local gx=0 gy=0 gw=0 gh=0 px=0 py=0 cx cy dx dy
+    command -v wlrctl >/dev/null 2>&1 || return 0
+    [ -n "$wid" ] || return 0
+    fightcade_wayland_ensure_env
+    while IFS='=' read -r key val; do
+        case "$key" in
+            X) gx=$val ;;
+            Y) gy=$val ;;
+            WIDTH) gw=$val ;;
+            HEIGHT) gh=$val ;;
+        esac
+    done <<EOF
+$(DISPLAY="$disp" xdotool getwindowgeometry --shell "$wid" 2>/dev/null)
+EOF
+    while IFS='=' read -r key val; do
+        case "$key" in
+            X) px=$val ;;
+            Y) py=$val ;;
+        esac
+    done <<EOF
+$(DISPLAY="$disp" xdotool getmouselocation --shell 2>/dev/null)
+EOF
+    case "$gx" in '' | *[!0-9]*) gx=0 ;; esac
+    case "$gy" in '' | *[!0-9]*) gy=0 ;; esac
+    case "$gw" in '' | *[!0-9]*) gw=0 ;; esac
+    case "$gh" in '' | *[!0-9]*) gh=0 ;; esac
+    case "$px" in '' | *[!0-9]*) px=0 ;; esac
+    case "$py" in '' | *[!0-9]*) py=0 ;; esac
+    [ "$gw" -gt 0 ] && [ "$gh" -gt 0 ] || return 0
+    cx=$((gx + gw / 2))
+    cy=$((gy + gh / 2))
+    dx=$((cx - px))
+    dy=$((cy - py))
+    [ "$dx" -eq 0 ] && [ "$dy" -eq 0 ] && return 0
+    wlrctl pointer move "$dx" "$dy" 2>/dev/null || true
+}
+
+fightcade_hd_fbneo_menu_fullscreen() {
+    local emu="$1" pattern wid disp gw=0 gh=0 sw sh
+    fightcade_wayland_session || return 0
+    switchres_session_active && return 0
+    case "$emu" in
+        fbneo | ggpofba) ;;
+        *) return 0 ;;
+    esac
+    command -v xdotool >/dev/null 2>&1 || return 0
+    pattern=$(wine_emu_window_pattern "$emu")
+    [ -n "$pattern" ] || return 0
+    disp=$(fightcade_pick_display)
+    wid=$(DISPLAY="$disp" xdotool search --name "$pattern" 2>/dev/null | head -1)
+    [ -n "$wid" ] || return 0
+    DISPLAY="$disp" xdotool windowactivate "$wid" 2>/dev/null || true
+    DISPLAY="$disp" xdotool windowraise "$wid" 2>/dev/null || true
+    fightcade_wayland_pointer_to_window "$wid" "$disp"
+    read -r sw sh <<< "$(DISPLAY="$disp" xdotool getdisplaygeometry 2>/dev/null)"
+    while IFS='=' read -r key val; do
+        [ "$key" = "WIDTH" ] && gw=$val
+        [ "$key" = "HEIGHT" ] && gh=$val
+    done <<EOF
+$(DISPLAY="$disp" xdotool getwindowgeometry --shell "$wid" 2>/dev/null)
+EOF
+    case "$gw" in '' | *[!0-9]*) gw=0 ;; esac
+    case "$gh" in '' | *[!0-9]*) gh=0 ;; esac
+    case "$sw" in '' | *[!0-9]*) sw=1280 ;; esac
+    case "$sh" in '' | *[!0-9]*) sh=800 ;; esac
+    if [ "$gw" -ge $((sw - 48)) ] && [ "$gh" -ge $((sh - 80)) ]; then
+        return 0
+    fi
+    # FBNeo: Alt+Delete enters fullscreen with the in-game menu still open.
+    fightcade_wine_emu_send_key "$emu" alt+Delete
+}
+
 fightcade_fbneo_send_key() {
     fightcade_wine_emu_send_key fbneo "$1"
 }
@@ -1522,7 +1619,8 @@ fightcade_emergency_recover() {
 
 # Gamepad combo (via fightcade-pad-mouse): emulator menu pause/resume.
 # CRT (ACTIVE=1): pause/resume Switchres plus emulator keys.
-# HD (no Switchres session): same keys only; display stays at desktop resolution.
+# HD Xorg: same keys only; display stays at desktop resolution.
+# HD Wayland (Steam Deck): also fullscreen windowed FBNeo so the pad cursor hits it.
 fightcade_crt_esc_pause() {
     local emu=""
 
@@ -1542,6 +1640,8 @@ fightcade_crt_esc_pause() {
         emu=$(fightcade_running_wine_menu_emu) || return 0
         if [ "$emu" = "snes9x" ] && ! switchres_session_active; then
             hd_pause_snes9x_menu
+        else
+            fightcade_hd_fbneo_menu_fullscreen "$emu"
         fi
         return 0
     fi
@@ -1568,6 +1668,8 @@ fightcade_crt_esc_pause() {
 
     printf '1\n' > "$PAUSEFILE"
     fightcade_wine_emu_send_key "$emu" Escape
+    sleep 0.12
+    fightcade_hd_fbneo_menu_fullscreen "$emu"
     fightcade_cursor_show
 }
 

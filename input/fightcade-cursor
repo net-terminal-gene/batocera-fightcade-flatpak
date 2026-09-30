@@ -1,10 +1,13 @@
 #!/bin/bash
-# Show or hide the X mouse cursor during Fightcade lobby vs in-game sessions.
-# Uses a dedicated unclutter instance (pidfile) so we never touch ES unclutter.
+# Show or hide the mouse cursor during Fightcade lobby vs in-game sessions.
+# X11 (CRT / HDMI PCs): dedicated unclutter instance (pidfile), never ES unclutter.
+# Wayland (Steam Deck / labwc): stock ShowCursor / HideCursor keybinds (A-W-s / A-W-h).
+# Never edits labwc rc.xml (Batocera display rotation must not be touched).
 #
 # Usage: fightcade-cursor show|hide
 
 PIDFILE="/tmp/fightcade-cursor-unclutter.pid"
+WL_STATE="/tmp/fightcade-cursor-wayland.state"
 
 pick_display() {
     [ -S /tmp/.X11-unix/X0 ] && { echo ":0.0"; return; }
@@ -12,7 +15,47 @@ pick_display() {
     echo "${DISPLAY:-:0.0}"
 }
 
+wayland_session() {
+    [ -n "${WAYLAND_DISPLAY:-}" ] && return 0
+    local base name
+    for base in "${XDG_RUNTIME_DIR:-}" /run /var/run; do
+        [ -n "$base" ] && [ -d "$base" ] || continue
+        for name in "$base"/wayland-*; do
+            [ -e "$name" ] || continue
+            case "$name" in *.lock) continue ;; esac
+            return 0
+        done
+    done
+    return 1
+}
+
+wayland_ensure_env() {
+    [ -n "${WAYLAND_DISPLAY:-}" ] || export WAYLAND_DISPLAY=wayland-0
+    [ -n "${XDG_RUNTIME_DIR:-}" ] || export XDG_RUNTIME_DIR=/var/run
+}
+
+# Batocera labwc rc.xml: A-W-s = ShowCursor; A-W-h = HideCursor (+ WarpCursor).
+cursor_labwc_hide() {
+    command -v wtype >/dev/null 2>&1 || return 0
+    [ -f "$WL_STATE" ] && [ "$(cat "$WL_STATE" 2>/dev/null)" = hidden ] && return 0
+    wayland_ensure_env
+    wtype -M alt -M logo -P h -p h 2>/dev/null || true
+    printf 'hidden\n' > "$WL_STATE"
+}
+
+cursor_labwc_show() {
+    command -v wtype >/dev/null 2>&1 || return 0
+    [ -f "$WL_STATE" ] && [ "$(cat "$WL_STATE" 2>/dev/null)" = visible ] && return 0
+    wayland_ensure_env
+    wtype -M alt -M logo -P s -p s 2>/dev/null || true
+    printf 'visible\n' > "$WL_STATE"
+}
+
 cursor_show() {
+    if wayland_session; then
+        cursor_labwc_show
+        return 0
+    fi
     if [ ! -f "$PIDFILE" ]; then
         return 0
     fi
@@ -29,6 +72,10 @@ cursor_show() {
 }
 
 cursor_hide() {
+    if wayland_session; then
+        cursor_labwc_hide
+        return 0
+    fi
     if [ -f "$PIDFILE" ]; then
         local pid
         pid=$(cat "$PIDFILE" 2>/dev/null)
