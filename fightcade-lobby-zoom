@@ -30,7 +30,15 @@ CRT_FORCE="/userdata/system/configs/fightcade-switchres.force"
 
 log() { printf 'fightcade-lobby-zoom: %s\n' "$*"; }
 
-detect_mode() {
+# "_vertical" when the TATE lobby toggle is on, so the vertical lobby keeps its
+# own zoom apart from the landscape lobby at the same display resolution.
+vertical_suffix() {
+    local v
+    v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcvertical' 2>/dev/null | tr -d '[:space:]')
+    [ "$v" = "1" ] && printf '_vertical'
+}
+
+detect_base_mode() {
     [ -f "$CRT_DISABLE" ] && { echo hd; return; }
     [ -f "$CRT_FORCE" ] && { echo crt; return; }
     local w=""
@@ -49,6 +57,12 @@ detect_mode() {
     fi
 }
 
+# Mode key used for the saved-zoom bucket: base display mode plus the vertical
+# suffix. Buckets: zoom_hd, zoom_hd_vertical, zoom_crt, zoom_crt_vertical.
+detect_mode() {
+    printf '%s%s\n' "$(detect_base_mode)" "$(vertical_suffix)"
+}
+
 conf_get() {
     local key="$1"
     [ -f "$CONF" ] || return 0
@@ -60,11 +74,14 @@ conf_set() {
     mkdir -p "$(dirname "$CONF")"
     if [ ! -f "$CONF" ]; then
         cat > "$CONF" <<'EOF'
-# Fightcade lobby zoom, saved separately per display mode.
+# Fightcade lobby zoom, saved separately per display mode and orientation.
 # Auto-updated when you exit Fightcade; edit to override (applied on next launch).
 # Values are Chromium zoom LEVELS: 0 = 100%, each +/-1 is about 1.2x.
+# _vertical buckets are the TATE lobby (fcvertical=1); the others are landscape.
 zoom_hd=
+zoom_hd_vertical=
 zoom_crt=
+zoom_crt_vertical=
 EOF
     fi
     if grep -q "^${key}=" "$CONF"; then
@@ -165,6 +182,14 @@ cmd_apply() {
     mode=$(detect_mode)
     echo "$mode" > "$MODE_STATE" 2>/dev/null || true
     apply_window_state
+    # Vertical (TATE) lobby zoom is owned by lobby/inject.js, which persists it to
+    # its own file the instant it changes (Chromium's Preferences flush is too
+    # laggy to survive the kill-on-exit). Leave Preferences alone here.
+    case "$mode" in
+        *_vertical)
+            log "vertical mode: zoom handled by lobby inject.js; skipping apply"
+            return 0 ;;
+    esac
     zoom=$(conf_get "zoom_${mode}")
     if [ -z "$zoom" ]; then
         log "no saved zoom for ${mode}; leaving Preferences as-is"
@@ -180,6 +205,12 @@ cmd_save() {
         mode=$(cat "$MODE_STATE" 2>/dev/null)
     fi
     [ -n "$mode" ] || mode=$(detect_mode)
+    case "$mode" in
+        *_vertical)
+            log "vertical mode: zoom handled by lobby inject.js; skipping save"
+            rm -f "$MODE_STATE"
+            return 0 ;;
+    esac
     zoom=$(prefs_get_zoom)
     if [ -z "$zoom" ]; then
         log "no live zoom found; nothing to save for ${mode}"
@@ -195,8 +226,10 @@ cmd_status() {
     mode=$(detect_mode)
     echo "mode:        ${mode}"
     echo "config:      ${CONF}"
-    echo "  zoom_hd    = $(conf_get zoom_hd)"
-    echo "  zoom_crt   = $(conf_get zoom_crt)"
+    echo "  zoom_hd           = $(conf_get zoom_hd)"
+    echo "  zoom_hd_vertical  = $(conf_get zoom_hd_vertical)"
+    echo "  zoom_crt          = $(conf_get zoom_crt)"
+    echo "  zoom_crt_vertical = $(conf_get zoom_crt_vertical)"
     echo "live zoom (${HOST}): $(prefs_get_zoom)"
     echo "display:     $(DISPLAY=:0 xdotool getdisplaygeometry 2>/dev/null)"
     echo "window-state:$( [ -f "$WSTATE" ] && cat "$WSTATE" || echo ' (none)')"
