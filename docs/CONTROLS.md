@@ -69,6 +69,18 @@ Map each controller the same way (same slots, same roles). Fightcade follows wha
 you set in **ES Controller Mapping** for that pad. The **slot → action** table above
 does not change; only which physical button you assign to each slot changes.
 
+### Advanced Game Options
+
+The Fightcade toggles (**CURSOR SPEED**, **VERTICAL MODE**, **FIGHTCADE DEBUG
+LOGGING**, lobby chat macros) live in the Fightcade entry's **Advanced Game
+Options** in EmulationStation: highlight **Fightcade** in the game list and press
+the game-options button.
+
+> [!IMPORTANT]
+> After changing a setting, back **all the way out** of the menu to the game list,
+> then launch Fightcade from there. Do **not** use the **LAUNCH** entry inside the
+> options menu, or the game starts before your change is saved.
+
 ### Cursor speed
 
 The stick or D-pad moves the pointer, and the speed is tuned for you automatically. HD
