@@ -15,7 +15,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css lobby/vertical-allowlist.js lobby/vertical-search.js input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg emulationstation/es_features_fightcade_vertical.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -351,15 +351,39 @@ seed_lobby_chat_settings() {
 }
 
 ES_FEATURES_CHANGED=0
+
+# Same CRT vs HD rule as fightcade-lobby-zoom detect_base_mode.
+fightcade_is_crt() {
+  local disable="/userdata/system/configs/fightcade-switchres.disable"
+  local force="/userdata/system/configs/fightcade-switchres.force"
+  [ -f "$disable" ] && return 1
+  [ -f "$force" ] && return 0
+  local w=""
+  w=$(DISPLAY=:0 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9][0-9]*\) x .*/\1/p' | head -1)
+  if [ -z "$w" ]; then
+    w=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -1)
+    w="${w%%x*}"
+  fi
+  case "$w" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$w" -lt 1024 ] && [ -x /usr/bin/switchres ]
+}
+
 install_es_features() {
   # Batocera merges es_features_*.cfg from this dir with the system es_features.cfg
   # at EmulationStation startup. Dropping our additive file here adds the per-game
   # Fightcade toggles to the flatpak emulator's Advanced Game Options without
   # touching the read-only /usr/share copy. ES only reads it at startup, so a change
   # here means ES must be restarted for the toggle to appear/update.
+  #
+  # VERTICAL MODE lives in a second file and is installed only on CRT. HD machines
+  # never get that file, so the switch is not listed in Advanced Game Options.
   local src="${PROJECT_DIR}/emulationstation/es_features_fightcade.cfg"
+  local vert_src="${PROJECT_DIR}/emulationstation/es_features_fightcade_vertical.cfg"
   local dir="/userdata/system/configs/emulationstation"
   local dst="${dir}/es_features_fightcade.cfg"
+  local vert_dst="${dir}/es_features_fightcade_vertical.cfg"
   [ -f "${src}" ] || { warn "es_features_fightcade.cfg missing; Fightcade toggles will not appear"; return 0; }
   mkdir -p "${dir}"
   if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
@@ -368,6 +392,21 @@ install_es_features() {
     install -m 0644 "${src}" "${dst}"
     ES_FEATURES_CHANGED=1
     ok "ES Fightcade features installed at ${dst}"
+  fi
+  if fightcade_is_crt && [ -f "${vert_src}" ]; then
+    if [ -f "${vert_dst}" ] && cmp -s "${vert_src}" "${vert_dst}"; then
+      ok "ES VERTICAL MODE: ${vert_dst} (CRT, unchanged)"
+    else
+      install -m 0644 "${vert_src}" "${vert_dst}"
+      ES_FEATURES_CHANGED=1
+      ok "ES VERTICAL MODE installed (CRT only) at ${vert_dst}"
+    fi
+  elif [ -f "${vert_dst}" ]; then
+    rm -f "${vert_dst}"
+    ES_FEATURES_CHANGED=1
+    ok "ES VERTICAL MODE removed (HD: toggle is hidden)"
+  else
+    ok "ES VERTICAL MODE omitted (HD: toggle is hidden)"
   fi
 }
 
@@ -618,7 +657,7 @@ for file in ${FILES}; do
     dest_dir=$(dirname "${PROJECT_DIR}/${file}")
     mkdir -p "${dest_dir}"
     case "${file}" in
-        *.ini|*.conf|*/emu.cfg|lobby/*) mode=0644 ;;
+        *.ini|*.conf|*.cfg|*/emu.cfg|lobby/*) mode=0644 ;;
         *) mode=0755 ;;
     esac
     install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"

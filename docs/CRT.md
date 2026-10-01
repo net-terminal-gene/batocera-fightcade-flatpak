@@ -43,6 +43,7 @@ resolution and refresh rate, then restores menu timing when the session ends.
 - [Recovery](#recovery)
 - [Debugging Switchres issues](#debugging-switchres-issues)
 - [After a Fightcade Flatpak update](#after-a-fightcade-flatpak-update)
+- [Vertical lobby (TATE)](CRT-VERTICAL.md)
 
 ## Fightcade resolution
 

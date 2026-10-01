@@ -78,3 +78,135 @@ body {
   margin: 4px 8px !important;
   background: #c0bfbc !important;
 }
+/* Rotated mouse cursor. Chromium paints the cursor in screen space (like native
+   tooltips), so it does not rotate with the page and looks sideways on the TATE
+   CRT. Override it with a pre-rotated arrow (rotated 90deg CW so the physical CRT
+   rotation cancels it) and set the hotspot at the arrow tip (top-right). */
+html, body, * {
+  cursor: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAWCAYAAADEtGw7AAAAdElEQVR4nO3TSwrAIBADUFN6/yun6KKUGuNMP6s2C0FGnzIoig7LzcDUSOZ9oJFY/BpcQuvg4BR+RCNwCD+j3USkNdn1WqE1axQEYA+YwVRg9rayx+xRqM0OHRU4qO/veoa6HmN4kwCaDZ/46iqvoH/+fDIb7TcfNwm7ib4AAAAASUVORK5CYII=) 21 1, auto !important;
+}
+/* Custom rotated tooltip. Native title tooltips are painted by the OS outside
+   the rotated document, so they face the wrong way in TATE mode. inject.js
+   strips the native title attributes and drives this element instead; it lives
+   inside the rotated <html>, so it rotates with the lobby. inject.js also
+   injects a matching <style> so a page reload (which does not re-read this
+   file) still styles it. */
+#fc-tate-tip {
+  position: fixed !important;
+  z-index: 2147483646 !important;
+  pointer-events: none !important;
+  max-width: 320px !important;
+  padding: 3px 8px !important;
+  background: #2e3436 !important;
+  color: #fff !important;
+  font: 12px/1.4 "Cantarell", "DejaVu Sans", sans-serif !important;
+  border: 1px solid #1b1f20 !important;
+  border-radius: 3px !important;
+  box-shadow: 1px 1px 4px rgba(0,0,0,0.45) !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+}
+/* Custom rotated <select> dropdown. Native select popups are drawn by the OS
+   outside the rotated document, so they open sideways in TATE mode. inject.js
+   blocks the native popup and drives this list instead; it lives inside the
+   rotated <html> so it rotates with the lobby. inject.js also injects a matching
+   <style> so a page reload still styles it. */
+#fc-tate-select {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  display: none;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  background: var(--mainColor, #2b1b2b) !important;
+  border: 2px solid var(--mainColor-light, #6b4a6b) !important;
+  border-radius: 4px !important;
+  box-shadow: 1px 1px 6px rgba(0,0,0,0.6) !important;
+  font: 0.9rem "Source Sans Pro", arial, sans-serif !important;
+  color: #fff !important;
+}
+#fc-tate-select .fc-opt {
+  padding: 0.3rem 0.9rem !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+}
+#fc-tate-select .fc-opt:hover,
+#fc-tate-select .fc-opt.sel {
+  background: var(--accentColor, #00b3b3) !important;
+  color: #111 !important;
+}
+/* Vertical/TATE room layout: stack the "Looking to play" panel on top of a
+   full-width chat. Stock Fightcade lays .channelContent out as a row with a
+   fixed-width usersListToolbar, which squeezes chat to a narrow column on the
+   portrait CRT. Switch to a column, make both children full width, and use
+   order to raise the users panel above chat. */
+.channelContent {
+  flex-flow: column nowrap !important;
+}
+.channelContent .chatWrapper,
+.channelContent .usersListToolbar {
+  width: 100% !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+}
+.channelContent .usersListToolbar {
+  order: -1 !important;
+  flex: 0 0 40% !important;
+  height: 40% !important;
+  overflow: hidden !important;
+}
+.channelContent .chatWrapper {
+  order: 0 !important;
+  flex: 0 0 60% !important;
+  height: 60% !important;
+  overflow: hidden !important;
+}
+/* Stock Fightcade makes .usersListWrapper position:fixed (top:60px;bottom:0;
+   width:320px), so it escapes the panel and covers the whole portrait screen.
+   Pull it back in-flow, full width (same as chat), scrolling inside the upper
+   40%. */
+.channelContent .usersListToolbar .usersListWrapper {
+  position: static !important;
+  top: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  padding-top: 0.5rem !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+/* Chat's own message area scrolls inside the lower 60%. */
+.channelContent .chatWrapper .chatContent {
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+/* Search Games page: the filter button gets squished to a thin sliver on the
+   narrow portrait width, so the 3-bar filter icon renders wrong. Keep the field
+   and padding as-is; just stop the filter button from shrinking and give the
+   icon a fixed square size so the 3 bars render correctly. */
+.searchWrapper .inputWrapper .filtersButton,
+.welcomeWrapper .inputWrapper .filtersButton {
+  flex: 0 0 auto !important;
+}
+.searchWrapper .inputWrapper .filtersButtonIcon,
+.welcomeWrapper .inputWrapper .filtersButtonIcon {
+  width: 32px !important;
+  height: 32px !important;
+  flex: 0 0 auto !important;
+}
+/* The search field ships with min-width:400px inside a row-nowrap,
+   center-justified wrapper. When zoomed in, the layout width narrows but the
+   field will not shrink, so the row overflows and the center-justified filter
+   button spills off the right edge and disappears. Let the field shrink and
+   keep the filter button reserved so the icon stays visible at any zoom. */
+.searchWrapper .inputWrapper,
+.welcomeWrapper .inputWrapper {
+  max-width: 100% !important;
+}
+.searchWrapper .inputWrapper input,
+.welcomeWrapper .inputWrapper input {
+  min-width: 0 !important;
+  width: auto !important;
+  flex: 1 1 auto !important;
+}

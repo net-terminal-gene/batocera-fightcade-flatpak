@@ -24,6 +24,24 @@ vertical_enabled() {
     [ "$v" = "1" ]
 }
 
+# Same CRT vs HD rule as fightcade-lobby-zoom detect_base_mode.
+is_crt() {
+    local disable="/userdata/system/configs/fightcade-switchres.disable"
+    local force="/userdata/system/configs/fightcade-switchres.force"
+    [ -f "$disable" ] && return 1
+    [ -f "$force" ] && return 0
+    local w=""
+    w=$(DISPLAY=:0 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9][0-9]*\) x .*/\1/p' | head -1)
+    if [ -z "$w" ]; then
+        w=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -1)
+        w="${w%%x*}"
+    fi
+    case "$w" in
+        '' | *[!0-9]*) return 1 ;;
+    esac
+    [ "$w" -lt 1024 ] && [ -x /usr/bin/switchres ]
+}
+
 app_dir() {
     local deploy
     deploy=$(flatpak info --system --show-location "${APP_ID}" 2>/dev/null) || return 1
@@ -84,9 +102,13 @@ enable_vertical() {
     }
     install -m 0644 "${SRC_DIR}/inject.js" "${inj}/inject.js"
     install -m 0644 "${SRC_DIR}/inject.css" "${inj}/inject.css"
+    # Vertical genre search scripts — copied so inject.js can find them at the
+    # fixed SRC_DIR path (/userdata/system/fightcade-flatpak/lobby); they stay
+    # in lobby/ and are not installed into inject/ (inject.js reads them from
+    # SRC_DIR directly in the page world via <script> injection).
     patch_nativefier "${app}/nativefier.json" 1
     ensure_preload_patch "${app}/lib/preload.js"
-    log "enabled (inject + rotated HTML menu)"
+    log "enabled (inject + rotated HTML menu + vertical genre search)"
 }
 
 disable_vertical() {
@@ -113,6 +135,11 @@ cmd_status() {
 }
 
 cmd_apply() {
+    if ! is_crt; then
+        disable_vertical
+        log "HD: vertical lobby disabled"
+        return 0
+    fi
     if vertical_enabled; then
         enable_vertical
     else

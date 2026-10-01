@@ -199,6 +199,7 @@ Collecting logs for a bug report (HD or CRT): [docs/DEBUGGING.md](docs/DEBUGGING
 | Lobby chat config (`fightcade-lobby-chat.conf`) | [docs/LOBBY-CHAT.md](docs/LOBBY-CHAT.md) |
 | HD fullscreen / aspect / vsync | [docs/HD.md](docs/HD.md) |
 | CRT / Switchres / native modelines | [docs/CRT.md](docs/CRT.md) |
+| CRT vertical lobby (TATE) | [docs/CRT-VERTICAL.md](docs/CRT-VERTICAL.md). CRT only. You will not see this switch in HD. |
 | Debugging & bug reports (logs) | [docs/DEBUGGING.md](docs/DEBUGGING.md) |
 
 License: [CC0 1.0](LICENSE)
