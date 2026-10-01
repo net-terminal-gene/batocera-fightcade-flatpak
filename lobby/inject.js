@@ -448,6 +448,21 @@
       box.style.top = top + "px";
     }
 
+    function isGenreSelect(select) {
+      var n = select;
+      while (n && n !== document.body) {
+        if (
+          n.classList &&
+          n.classList.contains("filterItem") &&
+          n.classList.contains("genre")
+        ) {
+          return true;
+        }
+        n = n.parentNode;
+      }
+      return false;
+    }
+
     function openFor(select) {
       box.innerHTML = "";
       var opts = select.options;
@@ -460,6 +475,16 @@
           row.addEventListener("mousedown", function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
+            if (
+              isGenreSelect(select) &&
+              String(o.textContent || "").trim().toLowerCase() === "vertical" &&
+              window.__fcCtaWrite
+            ) {
+              window.__fcCtaWrite(
+                "[fc-cta] vertical " +
+                  JSON.stringify({ ts: new Date().toISOString() })
+              );
+            }
             if (select.selectedIndex !== idx) {
               select.selectedIndex = idx;
               try {
@@ -536,6 +561,68 @@
   } catch (e) {
     fsMod = null;
   }
+
+  function installCtaFileLog() {
+    if (window.__fcCtaFile) {
+      return;
+    }
+    window.__fcCtaFile = true;
+    var LOG = "/userdata/system/fightcade-flatpak/lobby/fc-cta.log";
+    var seen = 0;
+    try {
+      if (fsMod) {
+        fsMod.writeFileSync(LOG, "");
+      }
+    } catch (e) {}
+    function write(chunk) {
+      if (!chunk || !fsMod) {
+        return;
+      }
+      try {
+        fsMod.appendFileSync(LOG, chunk);
+      } catch (e) {}
+    }
+    window.__fcCtaWrite = function (line) {
+      write(line + "\n");
+    };
+    function flush() {
+      var el = document.getElementById("fc-cta-log");
+      if (!el) {
+        return;
+      }
+      var text = el.textContent || "";
+      if (text.length <= seen) {
+        return;
+      }
+      var chunk = text.slice(seen);
+      seen = text.length;
+      write(chunk);
+    }
+    try {
+      var boot = new MutationObserver(function () {
+        var el = document.getElementById("fc-cta-log");
+        if (!el || el.__fcCtaObs) {
+          flush();
+          return;
+        }
+        el.__fcCtaObs = true;
+        try {
+          new MutationObserver(flush).observe(el, {
+            childList: true,
+            characterData: true,
+            subtree: true,
+          });
+        } catch (e) {}
+        flush();
+      });
+      boot.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+    setInterval(flush, 250);
+    window.__fcCtaWrite(
+      "[fc-cta] logger-ready " + JSON.stringify({ ts: new Date().toISOString() })
+    );
+  }
+  installCtaFileLog();
   var zoomLoaded = false;
 
   function clampZoom(z) {
