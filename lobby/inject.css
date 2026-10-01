@@ -150,20 +150,20 @@ html, body, * {
 }
 .channelContent .usersListToolbar {
   order: -1 !important;
-  flex: 0 0 50% !important;
-  height: 50% !important;
+  flex: 0 0 40% !important;
+  height: 40% !important;
   overflow: hidden !important;
 }
 .channelContent .chatWrapper {
   order: 0 !important;
-  flex: 0 0 50% !important;
-  height: 50% !important;
+  flex: 0 0 60% !important;
+  height: 60% !important;
   overflow: hidden !important;
 }
 /* Stock Fightcade makes .usersListWrapper position:fixed (top:60px;bottom:0;
    width:320px), so it escapes the panel and covers the whole portrait screen.
    Pull it back in-flow, full width (same as chat), scrolling inside the upper
-   half. */
+   40%. */
 .channelContent .usersListToolbar .usersListWrapper {
   position: static !important;
   top: auto !important;
@@ -175,7 +175,7 @@ html, body, * {
   overflow-y: auto !important;
   overflow-x: hidden !important;
 }
-/* Chat's own message area scrolls inside the lower half. */
+/* Chat's own message area scrolls inside the lower 60%. */
 .channelContent .chatWrapper .chatContent {
   min-height: 0 !important;
   overflow-y: auto !important;

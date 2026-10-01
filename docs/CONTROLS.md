@@ -71,10 +71,11 @@ does not change; only which physical button you assign to each slot changes.
 
 ### Advanced Game Options
 
-The Fightcade toggles (**CURSOR SPEED**, **VERTICAL MODE**, **FIGHTCADE DEBUG
-LOGGING**, lobby chat macros) live in the Fightcade entry's **Advanced Game
-Options** in EmulationStation: highlight **Fightcade** in the game list and press
-the game-options button.
+The Fightcade toggles (**CURSOR SPEED**, **FIGHTCADE DEBUG LOGGING**, lobby chat
+macros) live in the Fightcade entry's **Advanced Game Options** in
+EmulationStation: highlight **Fightcade** in the game list and press the
+game-options button. On CRT, **VERTICAL MODE** is listed there too. You will not
+see that switch in HD. See [CRT vertical lobby](CRT-VERTICAL.md).
 
 > [!IMPORTANT]
 > After changing a setting, back **all the way out** of the menu to the game list,

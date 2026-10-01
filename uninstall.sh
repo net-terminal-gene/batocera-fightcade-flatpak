@@ -418,8 +418,9 @@ ok "Removed Fightcade logs and configs"
 
 # Additive ES feature file (Debug Logging, Vertical Mode, lobby chat). Removing
 # it drops those controls from Advanced Game Options on the next ES restart.
-rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg"
-ok "Removed ES Debug toggle feature file"
+rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg" \
+      "${CONFIGS_DIR}/emulationstation/es_features_fightcade_vertical.cfg"
+ok "Removed ES Fightcade feature files"
 
 # Per-game Fightcade keys written to batocera.conf (videomode, fclobby_*,
 # fccursor_*, fcdebug, fcvertical). Delete every flatpak["Fightcade.flatpak"].*

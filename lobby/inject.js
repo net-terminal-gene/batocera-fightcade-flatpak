@@ -667,6 +667,30 @@
     } catch (e) {}
   }
 
+  // Inject page-world scripts for the vertical genre search feature.
+  // inject.js runs in Electron's isolated world so it cannot directly hook
+  // WebSocket. We read the source files from disk via fs and append them as
+  // <script> elements so they execute in the page world.
+  var VERTICAL_SRC_DIR = "/userdata/system/fightcade-flatpak/lobby";
+
+  function setupVerticalSearch() {
+    if (window.__fcVerticalPageLoaded || !fsMod) {
+      return;
+    }
+    window.__fcVerticalPageLoaded = true;
+    var scripts = ["vertical-allowlist.js", "vertical-search.js"];
+    for (var si = 0; si < scripts.length; si++) {
+      var name = scripts[si];
+      try {
+        var filePath = VERTICAL_SRC_DIR + "/" + name;
+        if (!fsMod.existsSync(filePath)) { continue; }
+        var el = document.createElement("script");
+        el.textContent = fsMod.readFileSync(filePath, "utf8");
+        (document.head || document.documentElement).appendChild(el);
+      } catch (e) {}
+    }
+  }
+
   function applyFit() {
     hideNativeMenu();
     loadSavedZoom();
@@ -732,6 +756,7 @@
     mountMenu();
     setupTooltips();
     setupSelects();
+    setupVerticalSearch();
     installZoomControls();
   }
 
