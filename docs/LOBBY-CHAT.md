@@ -40,9 +40,12 @@ the easiest way for most people.
 1. Highlight **Fightcade** in EmulationStation.
 2. **Hold SOUTH** to open its options, then select **ADVANCED GAME OPTIONS**.
 3. Scroll to the **EDIT LOBBY CHAT** group. You will see a row per slot:
-   **NORTH**, **EAST**, **SOUTH**, **WEST**, **R2**, each showing its current text.
-4. Select a slot to open the on-screen keyboard, type your message, and press the
-   **circle checkmark** to save it and go back. Clear the text to **disable** that slot.
+   **NORTH**, **EAST**, **SOUTH**, **WEST**, **R2**. Each row shows that slot's
+   current message. If the message is longer than 16 characters, the row title
+   is cut and ends with `...`.
+4. Select a slot to open the on-screen keyboard. The text field already contains
+   the full saved message. Edit it, then press the **circle checkmark** to save
+   and go back. Clear the text to **disable** that slot.
 5. Press **B / Back** to leave ADVANCED GAME OPTIONS, then **B / Back** again to
    return to the game list. Backing out is what saves your changes.
 6. Launch Fightcade normally (press **SOUTH**).
