@@ -18,8 +18,9 @@ FBNEO_ACTIVE_FLAG="/tmp/fightcade-fbneo-crt-active"
 # whole Flycast session, or a whole Snes9x session. Pad-mouse skips its lobby
 # cursor transform while this exists, because X itself is rotated. FBNeo
 # gameplay never sets it: rotating that game mode breaks fullscreen. Flycast
-# and Snes9x stay on the lobby mode (641x480), which is wide enough to rotate
-# right into a 480x641 framebuffer.
+# stays on the lobby mode (641x480), which is wide enough to rotate right
+# into a 480x641 framebuffer. Vertical SNES uses 256x256. A 224-line mode
+# leaves the screen 224 tall, and the rotated picture is cut off at the bottom.
 VERT_ROTATE_FLAG="/tmp/fightcade-fbneo-vertical-rotate"
 # Horizontal FBNeo (PC Engine and the other wide consoles) stays on the rotated
 # lobby mode for the whole session. Vertical arcade games do not set this:
@@ -257,19 +258,34 @@ patch_snes9x_conf() {
     sed -i 's/^\([[:space:]]*Fullscreen:DoubleBuffered[[:space:]]*=\).*/\1 TRUE/' "$conf"
 }
 
-# Vertical SNES stays on the lobby mode and rotates it right. The conf is what
-# Snes9x reads at startup: fullscreen size is the rotated framebuffer, the menu
-# stays hidden, and the picture stretches to that window. Patching this after
-# the window exists does not resize the DirectDraw surface.
+# X screen size after the modeset. The rotated CRTC line can say 224x256
+# while the drawable screen stays 320x224, and a taller window is cut off.
+fightcade_x_screen_pixels() {
+    local w h
+    w=$(xrandr 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9][0-9]*\) x \([0-9][0-9]*\).*/\1/p' | head -1)
+    h=$(xrandr 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9][0-9]*\) x \([0-9][0-9]*\).*/\2/p' | head -1)
+    [ -n "$w" ] && [ -n "$h" ] || return 1
+    printf '%s %s\n' "$w" "$h"
+}
+
+# Vertical SNES keeps rotate-right, then uses 256x256. The rotated picture
+# is 256 pixels tall, so a 224-line mode cuts off the bottom. This monitor
+# scans that square at 57.73 Hz. Rotate while the lobby mode is still up.
+# Rotating a short mode after the fact drops back to 641x480. The window is
+# the drawable screen. The conf is what Snes9x reads at startup.
 fightcade_prepare_snes9x_vertical() {
-    local conf="$1" mw mh fw fh
-    read -r mw mh <<< "$(snes9x_lobby_pixels "${PRE_RES:-}")"
-    if [ "$mw" -ge "$mh" ]; then
-        fw=$mh
-        fh=$mw
-    else
-        fw=$mw
-        fh=$mh
+    local conf="$1" fw fh
+    printf '1\n' > "$VERT_ROTATE_FLAG"
+    fightcade_apply_fbneo_vertical_rotation
+    W=256
+    H=256
+    R=60.10
+    fightcade_drop_stale_switchres_modes
+    /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+    fightcade_reassert_switchres_output "$W" "$H"
+    if ! read -r fw fh <<< "$(fightcade_x_screen_pixels)"; then
+        fw=320
+        fh=$H
     fi
     patch_snes9x_conf "$conf" "$fw" "$fh"
     sed -i 's/^\([[:space:]]*Stretch:Enabled[[:space:]]*=\).*/\1 TRUE/' "$conf"
@@ -278,10 +294,8 @@ fightcade_prepare_snes9x_vertical() {
     sed -i "s/^\([[:space:]]*Window:Height[[:space:]]*=\).*/\1 $fh/" "$conf"
     sed -i 's/^\([[:space:]]*Window:Left[[:space:]]*=\).*/\1 0/' "$conf"
     sed -i 's/^\([[:space:]]*Window:Top[[:space:]]*=\).*/\1 0/' "$conf"
-    printf '1\n' > "$VERT_ROTATE_FLAG"
-    fightcade_apply_fbneo_vertical_rotation
     : > "$SNES_LAUNCH_GO"
-    dbg "vertical snes9x: rotated right, fullscreen ${fw}x${fh}"
+    dbg "vertical snes9x: ${W}x${H} rotated right, framebuffer ${fw}x${fh}"
 }
 
 fightcade_release_snes_launch_gate() {
@@ -562,20 +576,23 @@ hd_resume_snes9x_menu() {
     fightcade_cursor_hide
 }
 
-# Vertical SNES is already on the rotated lobby mode. Opening the menu must
-# leave fullscreen once so the bar stays visible, and must not modeset back to
-# 256x224 or send a second Alt+Return (that hides the menu again).
+# Vertical SNES gameplay is 256x256 rotated right. The menu needs the lobby
+# mode, still rotated, so the bar fits.
 fightcade_snes9x_vertical_pause() {
-    local conf pre_res fw fh
+    local conf pre_mode pre_res fw fh
     conf=$(snes9x_conf_for_menu)
+    pre_mode=""
     pre_res=""
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
         . "$STATEFILE"
+        pre_mode="${PRE_MODE:-}"
         pre_res="${PRE_RES:-}"
     fi
     read -r fw fh <<< "$(fightcade_snes9x_rotated_pixels "$pre_res")"
     printf '1\n' > "$VERT_ROTATE_FLAG"
+    fightcade_apply_fbneo_vertical_rotation
+    restore_display_mode "$pre_mode" "$pre_res"
     fightcade_apply_fbneo_vertical_rotation
     if crt_is_paused; then
         fightcade_snes9x_fit_window "$fw" "$fh" || true
@@ -589,27 +606,30 @@ fightcade_snes9x_vertical_pause() {
     fightcade_cursor_show
 }
 
-# SELECT+NORTH closes the menu and returns to stretched fullscreen without
-# clearing the rotation or running switchres on the 256x224 game mode.
+# SELECT+NORTH closes the menu, keeps the rotate, and returns to the
+# native mode. The window matches the drawable screen so the bottom
+# is not cut off.
 fightcade_snes9x_vertical_resume() {
-    local conf pre_res fw fh
+    local conf fw fh
     crt_is_paused || return 0
     conf=$(snes9x_conf_for_menu)
-    pre_res=""
+    fw=""; fh=""
     if [ -f "$STATEFILE" ]; then
         # shellcheck disable=SC1090
         . "$STATEFILE"
-        pre_res="${PRE_RES:-}"
     fi
-    read -r fw fh <<< "$(fightcade_snes9x_rotated_pixels "$pre_res")"
     restore_snes9x_menu_pause_conf "$conf"
     printf '1\n' > "$VERT_ROTATE_FLAG"
     fightcade_apply_fbneo_vertical_rotation
-    # The menu window is already the full rotated size, so geometry cannot tell
-    # windowed-with-menu from emulate-fullscreen. Pause means the menu is open:
-    # one Alt+Return returns to fullscreen and leaves the rotation alone.
+    if [ -n "${W:-}" ] && [ -n "${H:-}" ] && [ -n "${R:-}" ]; then
+        fightcade_drop_stale_switchres_modes
+        /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+        fightcade_reassert_switchres_output "$W" "$H"
+        read -r fw fh <<< "$(fightcade_x_screen_pixels)" || true
+        [ -n "$fw" ] && [ -n "$fh" ] && patch_snes9x_conf "$conf" "$fw" "$fh"
+    fi
     fightcade_snes9x_leave_emulate_fullscreen || true
-    fightcade_snes9x_fit_window "$fw" "$fh" || true
+    [ -n "$fw" ] && [ -n "$fh" ] && fightcade_snes9x_fit_window "$fw" "$fh" || true
     printf '0\n' > "$PAUSEFILE"
     fightcade_cursor_hide
 }
@@ -1153,7 +1173,7 @@ fightcade_same_play_session_active() {
 }
 
 fightcade_reassert_switchres_session() {
-    local emu ini
+    local emu ini fw fh
     [ -f "$STATEFILE" ] || return 0
     # shellcheck disable=SC1090
     . "$STATEFILE"
@@ -1170,6 +1190,9 @@ fightcade_reassert_switchres_session() {
     if [ "$emu" = "snes9x" ] && fightcade_vertical_on; then
         printf '1\n' > "$VERT_ROTATE_FLAG"
         fightcade_apply_fbneo_vertical_rotation
+        fightcade_drop_stale_switchres_modes
+        /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+        fightcade_reassert_switchres_output "$W" "$H"
     elif crt_switchres_emu "$emu"; then
         fightcade_drop_stale_switchres_modes
         /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
@@ -1181,7 +1204,11 @@ fightcade_reassert_switchres_session() {
             fightcade_refresh_fbneo_video "$W" "$H"
             ;;
         snes9x)
-            if ! fightcade_vertical_on; then
+            if fightcade_vertical_on; then
+                if read -r fw fh <<< "$(fightcade_x_screen_pixels)"; then
+                    patch_snes9x_conf "${SNES9X_CONF:-}" "$fw" "$fh"
+                fi
+            else
                 patch_snes9x_conf "${SNES9X_CONF:-}" "$W" "$H"
                 fightcade_refresh_wine_emu_video snes9x "$W" "$H"
             fi
@@ -1754,13 +1781,6 @@ fightcade_dispatch() {
     dbg "dispatch begin emu=$EMU_PARSED rom=$ROM_PARSED display=$DISPLAY"
 
     if fightcade_same_play_session_active "$EMU_PARSED" "$ROM_PARSED"; then
-        # Vertical SNES is supposed to be the lobby mode rotated right, not the
-        # 256x224 game mode. Reasserting switchres would undo that.
-        if [ "$EMU_PARSED" = "snes9x" ] && fightcade_vertical_on \
-            && [ "$(fightcade_output_rotation "$(fightcade_primary_output)")" = "right" ]; then
-            printf '%s dispatch skip (vertical snes9x already rotated): %s\n' "$(date '+%F %T')" "$URL" >> "$LOG_FILE"
-            return 0
-        fi
         if fightcade_fbneo_horizontal_session \
             && [ "$(fightcade_output_rotation "$(fightcade_primary_output)")" = "right" ]; then
             printf '%s dispatch skip (horizontal fbneo already rotated): %s\n' "$(date '+%F %T')" "$URL" >> "$LOG_FILE"
@@ -1885,13 +1905,12 @@ fightcade_monitor_play() {
         fightcade_apply_fbneo_vertical_rotation
         dbg "vertical flycast: output rotated right"
     fi
-    # Snes9x does not follow a rotation done after its window exists, and the
-    # 256x224 game mode cannot rotate (X will not go below 320px wide). Keep
-    # the lobby mode, already rotated in pre_play, and do not modeset.
+    # Rotate is already right from pre_play. Do not clear it: switchres on a
+    # normal 256x224, then rotating, makes X abandon the mode.
     if [ "$emu" = "snes9x" ] && fightcade_vertical_on; then
         printf '1\n' > "$VERT_ROTATE_FLAG"
         fightcade_apply_fbneo_vertical_rotation
-        dbg "vertical snes9x: staying on rotated lobby mode"
+        dbg "vertical snes9x: native ${W}x${H} with rotate right"
     fi
     if fightcade_fbneo_horizontal_session; then
         printf '1\n' > "$VERT_ROTATE_FLAG"
@@ -1902,7 +1921,15 @@ fightcade_monitor_play() {
     export DISPLAY=$(fightcade_pick_display)
 
     if [ "$emu" = "snes9x" ] && fightcade_vertical_on; then
-        dbg "vertical snes9x: switchres skipped"
+        # pre_play already modeset before the window was created. Do not run
+        # minTomaxResolution here: that puts the lobby mode back.
+        if ! fightcade_output_mode_is "$(fightcade_primary_output)" "$W" "$H"; then
+            dbg "monitor: vertical snes9x switchres ${W}x${H}@${R}"
+            fightcade_drop_stale_switchres_modes
+            /usr/bin/switchres "$W" "$H" "$R" -s -k 2>&1 || true
+            fightcade_reassert_switchres_output "$W" "$H"
+        fi
+        dbg "monitor: vertical snes9x output now $(batocera-resolution currentResolution 2>/dev/null)"
     elif fightcade_fbneo_horizontal_session; then
         dbg "horizontal fbneo: switchres skipped"
     elif crt_switchres_emu "$emu"; then

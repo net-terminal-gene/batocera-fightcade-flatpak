@@ -36,8 +36,9 @@ if [[ "\$1" == fcade://* ]]; then
   fi
   if [ -n "\$pending_url" ]; then
     printf '%s\n' "\$pending_url" > "${PROJECT_DIR}/play.pending"
-    # Vertical SNES must not create its window until the host has rotated the
-    # lobby mode. A resize after the window exists draws black over the lobby.
+    # Vertical SNES must not create its window until the host has applied the
+    # native mode on the already-rotated output. A resize after the window
+    # exists draws black over the lobby.
     case "\$pending_url" in
       fcade://play/snes9x/*|fcade://play/fbneo/*|fcade://play/ggpofba/*)
         if grep -F 'flatpak["Fightcade.flatpak"].fcvertical=1' /userdata/system/batocera.conf >/dev/null 2>&1; then
