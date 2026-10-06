@@ -23,8 +23,9 @@ FBNEO_ACTIVE_FLAG="/tmp/fightcade-fbneo-crt-active"
 # leaves the screen 224 tall, and the rotated picture is cut off at the bottom.
 VERT_ROTATE_FLAG="/tmp/fightcade-fbneo-vertical-rotate"
 # Horizontal FBNeo (PC Engine and the other wide consoles) stays on the rotated
-# lobby mode for the whole session. Vertical arcade games do not set this:
-# FBNeo already draws those upright, and Select+North only rotates their menu.
+# lobby mode for the whole session. Vertical arcade games do not set this.
+# Their orientation comes from nVidRotationAdjust in fcadefbneo.ini: 1 while
+# ES vertical mode is on (native vertical), 0 when it is off (landscape).
 FBNEO_HORZ_ROTATE="/tmp/fightcade-fbneo-horizontal-rotate"
 # xdg-open waits on this before starting Snes9x when vertical mode is on, so
 # the emulator window is created on the already-rotated screen.
@@ -201,6 +202,12 @@ patch_wine_ini() {
     sed -i "s/^bMonitorAutoCheck .*/bMonitorAutoCheck 0/" "$ini"
     sed -i "s/^nWindowPosX .*/nWindowPosX 0/" "$ini"
     sed -i "s/^nWindowPosY .*/nWindowPosY 0/" "$ini"
+    # Master ini. 1 = do not rotate vertical games (TATE). 0 = landscape.
+    if fightcade_vertical_on; then
+        sed -i 's/^nVidRotationAdjust .*/nVidRotationAdjust 1/' "$ini"
+    else
+        sed -i 's/^nVidRotationAdjust .*/nVidRotationAdjust 0/' "$ini"
+    fi
 }
 
 # Wide FBNeo games (PC Engine and the other horizontal consoles) cannot rotate
@@ -221,21 +228,18 @@ fightcade_fbneo_horizontal_session() {
 }
 
 restore_ini() {
-    local ini="$1"
+    local ini="$1" rot=0
     [ -n "$ini" ] || return 0
     if [ -f "${ini}.bak.switchres" ]; then
-        # FBNeo rewrites the whole main ini when a game quits, so restoring the
-        # pre-game backup would wipe in-game video-menu changes. Carry over the
-        # "Rotate vertically aligned games" toggle (nVidRotationAdjust), which
-        # switchres does not manage, so the user's choice survives the restore.
-        local rot=""
-        if [ -f "$ini" ]; then
-            rot=$(sed -n 's/^nVidRotationAdjust //p' "$ini" | head -n1 | tr -d '[:space:]')
-        fi
+        # FBNeo rewrites the whole main ini on quit. Put the pre-game file back,
+        # then force nVidRotationAdjust from the ES vertical switch. That key is
+        # not a leftover in-game toggle.
         mv -f "${ini}.bak.switchres" "$ini"
-        if [ -n "$rot" ] && [ -f "$ini" ] && grep -q '^nVidRotationAdjust ' "$ini"; then
-            sed -i "s/^nVidRotationAdjust .*/nVidRotationAdjust $rot/" "$ini"
-        fi
+    fi
+    [ -f "$ini" ] || return 0
+    fightcade_vertical_on && rot=1
+    if grep -q '^nVidRotationAdjust ' "$ini"; then
+        sed -i "s/^nVidRotationAdjust .*/nVidRotationAdjust ${rot}/" "$ini"
     fi
 }
 
@@ -1716,6 +1720,9 @@ fightcade_pre_play() {
     if ! fightcade_should_use_switchres; then
         dbg "pre_play: switchres NOT used (HD/disabled/non-xorg/>=1024w); running HD baseline"
         fightcade_apply_hd_video_baseline
+        # Before the launch gate opens. FBNeo reads fcadefbneo.ini at startup.
+        [ -x "${PROJECT_DIR}/fightcade-lobby-vertical" ] && \
+            "${PROJECT_DIR}/fightcade-lobby-vertical" fbneo-rotation >>"$LOG_FILE" 2>&1 || true
         fightcade_release_snes_launch_gate
         fightcade_save_session_state "" "" "" "" "" 0
         return 0

@@ -91,6 +91,37 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 }
 
+# fcadefbneo.ini is the one config every FBNeo game reads. nVidRotationAdjust
+# non-zero means "do not rotate vertical games", which is upright on a TATE
+# cabinet. 0 rotates those games for a landscape monitor. Horizontal games
+# ignore this key; switchres rotates those with the output.
+apply_fbneo_rotation() {
+    local val=0 ini ggpo data preset
+    vertical_enabled && val=1
+    data="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+    ini="${data}/config/fcadefbneo/fcadefbneo.ini"
+    ggpo="${data}/config/ggpofba/ggpofba.ini"
+    preset="${PROJECT_DIR}/hd/presets/fcadefbneo.ini"
+    if [ ! -f "$ini" ] && [ -f "$preset" ]; then
+        mkdir -p "$(dirname "$ini")"
+        cp "$preset" "$ini"
+        log "installed $(basename "$ini") from preset"
+    fi
+    set_rotation_key "$ini" "$val"
+    set_rotation_key "$ggpo" "$val"
+    log "nVidRotationAdjust ${val}"
+}
+
+set_rotation_key() {
+    local ini="$1" val="$2"
+    [ -f "$ini" ] || return 0
+    if grep -q '^nVidRotationAdjust ' "$ini"; then
+        sed -i "s/^nVidRotationAdjust .*/nVidRotationAdjust ${val}/" "$ini"
+    else
+        printf 'nVidRotationAdjust %s\n' "$val" >> "$ini"
+    fi
+}
+
 enable_vertical() {
     local app inj
     app=$(app_dir) || { log "Fightcade Flatpak app dir not found"; return 1; }
@@ -135,6 +166,9 @@ cmd_status() {
 }
 
 cmd_apply() {
+    # ES VERTICAL MODE owns the FBNeo master ini on CRT and on HD. The lobby
+    # inject below stays CRT-only.
+    apply_fbneo_rotation
     if ! is_crt; then
         disable_vertical
         log "HD: vertical lobby disabled"
@@ -150,8 +184,9 @@ cmd_apply() {
 case "${1:-}" in
     apply)  cmd_apply ;;
     status) cmd_status ;;
+    fbneo-rotation) apply_fbneo_rotation ;;
     *)
-        printf 'Usage: fightcade-lobby-vertical apply|status\n' >&2
+        printf 'Usage: fightcade-lobby-vertical apply|status|fbneo-rotation\n' >&2
         exit 2
         ;;
 esac
