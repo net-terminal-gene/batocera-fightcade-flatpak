@@ -431,13 +431,16 @@ PY
 
 ES_FEATURES_CHANGED=0
 
-# Same CRT vs HD rule as fightcade-lobby-zoom detect_base_mode.
+# Same CRT vs HD rule as fightcade-lobby-vertical is_crt.
+# Wayland / HD is never CRT, so a Steam Deck install does not get the toggle.
 fightcade_is_crt() {
   local disable="/userdata/system/configs/fightcade-switchres.disable"
   local force="/userdata/system/configs/fightcade-switchres.force"
   [ -f "$disable" ] && return 1
   [ -f "$force" ] && return 0
-  local w=""
+  local dm w=""
+  dm=$(batocera-resolution getDisplayMode 2>/dev/null || true)
+  [ "$dm" = "xorg" ] || return 1
   w=$(DISPLAY=:0 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9][0-9]*\) x .*/\1/p' | head -1)
   if [ -z "$w" ]; then
     w=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -1)
@@ -753,6 +756,64 @@ ok "Scripts installed to ${PROJECT_DIR}"
 # Install game hook into Batocera user scripts directory
 install -m 0755 "${PROJECT_DIR}/fightcade-game-hook" "${SCRIPTS_DIR}/fightcade-game-hook"
 ok "Game hook installed to ${SCRIPTS_DIR}/fightcade-game-hook"
+
+# /userdata/system/scripts only runs on gameStart/gameStop. The menu file has
+# to be right before EmulationStation launches. emulationstation-standalone
+# runs custom-es-config at that moment.
+install_vertical_boot_hook() {
+  local hook="/userdata/system/custom-es-config"
+  local marker="# fightcade-vertical-sync"
+  local block
+  block=$(cat <<EOF
+${marker}
+if [ -x ${PROJECT_DIR}/fightcade-lobby-vertical ]; then
+  ${PROJECT_DIR}/fightcade-lobby-vertical sync-menu >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
+fi
+EOF
+)
+  if [ ! -f "${hook}" ]; then
+    printf '#!/bin/bash\n%s\n' "${block}" > "${hook}"
+    chmod 755 "${hook}"
+    ok "VERTICAL MODE boot hook installed at ${hook}"
+  elif grep -q "${marker}" "${hook}"; then
+    ok "VERTICAL MODE boot hook already in ${hook}"
+  else
+    printf '\n%s\n' "${block}" >> "${hook}"
+    chmod 755 "${hook}"
+    ok "VERTICAL MODE boot hook appended to ${hook}"
+  fi
+}
+install_vertical_boot_hook
+
+# Wayland HD has no xrandr, so emulationstation-standalone skips custom-es-config.
+# labwc autostart is what launches ES on the Steam Deck HD boot.
+install_vertical_wayland_hook() {
+  local auto="/userdata/system/.config/labwc/autostart"
+  local marker="# fightcade-vertical-sync"
+  local block
+  block=$(cat <<EOF
+${marker}
+if [ -x ${PROJECT_DIR}/fightcade-lobby-vertical ]; then
+  ${PROJECT_DIR}/fightcade-lobby-vertical sync-menu >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
+fi
+EOF
+)
+  [ -f "${auto}" ] || return 0
+  if grep -q "${marker}" "${auto}"; then
+    ok "VERTICAL MODE Wayland hook already in ${auto}"
+    return 0
+  fi
+  awk -v block="${block}" '
+    $0 ~ /emulationstation-standalone/ && !done {
+      print block
+      done=1
+    }
+    { print }
+  ' "${auto}" > "${auto}.tmp" && mv "${auto}.tmp" "${auto}"
+  chmod 755 "${auto}"
+  ok "VERTICAL MODE Wayland hook installed in ${auto}"
+}
+install_vertical_wayland_hook
 
 # Apply Flatpak filesystem overrides
 apply_overrides

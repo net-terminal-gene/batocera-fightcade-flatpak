@@ -125,6 +125,18 @@ slow_speed_${mode}_lobby=${slowv}
     printf '%s' "$overlay" > "$CURSOR_SPEED_OVERLAY"
 }
 
+# HD and VERTICAL MODE cannot be on together. `start` runs when
+# EmulationStation comes up, which is before Advanced Game Options is opened.
+# gameStart is too late: the row is already on screen.
+case "$EVENT" in
+    start|boot)
+        if [ -x "$LOBBY_VERTICAL" ]; then
+            "$LOBBY_VERTICAL" sync-menu >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
+        fi
+        exit 0
+        ;;
+esac
+
 [ "$SYSTEM" = "flatpak" ] || exit 0
 
 case "$EVENT" in

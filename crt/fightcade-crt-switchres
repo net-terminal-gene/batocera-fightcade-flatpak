@@ -864,6 +864,8 @@ fightcade_output_mode_is() {
 }
 
 fightcade_vertical_on() {
+    # HD never rotates, even if a leftover fcvertical=1 is still in batocera.conf.
+    fightcade_should_use_switchres || return 1
     local v
     v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcvertical' 2>/dev/null | tr -d '[:space:]')
     [ "$v" = "1" ]

@@ -422,6 +422,35 @@ rm -f "${CONFIGS_DIR}/emulationstation/es_features_fightcade.cfg" \
       "${CONFIGS_DIR}/emulationstation/es_features_fightcade_vertical.cfg"
 ok "Removed ES Fightcade feature files"
 
+# Pre-ES hook. Remove only our block so a hand-written custom-es-config stays.
+ES_BOOT_HOOK="/userdata/system/custom-es-config"
+if [ -f "${ES_BOOT_HOOK}" ] && grep -q '# fightcade-vertical-sync' "${ES_BOOT_HOOK}"; then
+    awk '
+        /^# fightcade-vertical-sync$/ { skip=1; next }
+        skip && /^if \[ -x \/userdata\/system\/fightcade-flatpak\/fightcade-lobby-vertical \]; then$/ { next }
+        skip && /fightcade-lobby-vertical sync-menu/ { next }
+        skip && /^fi$/ { skip=0; next }
+        { print }
+    ' "${ES_BOOT_HOOK}" > "${ES_BOOT_HOOK}.tmp" && mv "${ES_BOOT_HOOK}.tmp" "${ES_BOOT_HOOK}"
+    if ! grep -q '[^[:space:]]' "${ES_BOOT_HOOK}"; then
+        rm -f "${ES_BOOT_HOOK}"
+    fi
+    ok "Removed VERTICAL MODE boot hook from ${ES_BOOT_HOOK}"
+fi
+
+# Same block in the Wayland launcher. Leave the rest of labwc autostart alone.
+LABWC_AUTOSTART="/userdata/system/.config/labwc/autostart"
+if [ -f "${LABWC_AUTOSTART}" ] && grep -q '# fightcade-vertical-sync' "${LABWC_AUTOSTART}"; then
+    awk '
+        /^# fightcade-vertical-sync$/ { skip=1; next }
+        skip && /^if \[ -x \/userdata\/system\/fightcade-flatpak\/fightcade-lobby-vertical \]; then$/ { next }
+        skip && /fightcade-lobby-vertical sync-menu/ { next }
+        skip && /^fi$/ { skip=0; next }
+        { print }
+    ' "${LABWC_AUTOSTART}" > "${LABWC_AUTOSTART}.tmp" && mv "${LABWC_AUTOSTART}.tmp" "${LABWC_AUTOSTART}"
+    ok "Removed VERTICAL MODE Wayland hook from ${LABWC_AUTOSTART}"
+fi
+
 # Per-game Fightcade keys written to batocera.conf (videomode, fclobby_*,
 # fccursor_*, fcdebug, fcvertical). Delete every flatpak["Fightcade.flatpak"].*
 # line so no Fightcade setting survives. Real ROM/BIOS keys are untouched.
