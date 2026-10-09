@@ -24,6 +24,55 @@ vertical_enabled() {
     [ "$v" = "1" ]
 }
 
+ES_VERT_CFG="/userdata/system/configs/emulationstation/es_features_fightcade_vertical.cfg"
+ES_VERT_SRC="${PROJECT_DIR}/emulationstation/es_features_fightcade_vertical.cfg"
+BATOCERA_CONF="/userdata/system/batocera.conf"
+
+# crt: xorg, switchres present, width under 1024 (or the force file).
+# hd: Wayland, or xorg at 1024 or wider, or the switchres disable file.
+# unknown: display mode or width could not be read. Callers must leave the
+# vertical menu alone. A blank reading during boot is not HD.
+display_class() {
+    local disable="/userdata/system/configs/fightcade-switchres.disable"
+    local force="/userdata/system/configs/fightcade-switchres.force"
+    if [ -f "$disable" ]; then
+        printf 'hd\n'
+        return 0
+    fi
+    if [ -f "$force" ]; then
+        printf 'crt\n'
+        return 0
+    fi
+    local dm w=""
+    dm=$(batocera-resolution getDisplayMode 2>/dev/null || true)
+    case "$dm" in
+        wayland) printf 'hd\n'; return 0 ;;
+        xorg) ;;
+        *) printf 'unknown\n'; return 0 ;;
+    esac
+    w=$(DISPLAY=:0 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9][0-9]*\) x .*/\1/p' | head -1)
+    if [ -z "$w" ]; then
+        w=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -1)
+        w="${w%%x*}"
+    fi
+    case "$w" in
+        '' | *[!0-9]*) printf 'unknown\n'; return 0 ;;
+    esac
+    if [ "$w" -ge 1024 ]; then
+        printf 'hd\n'
+        return 0
+    fi
+    if [ -x /usr/bin/switchres ]; then
+        printf 'crt\n'
+    else
+        printf 'hd\n'
+    fi
+}
+
+is_crt() {
+    [ "$(display_class)" = "crt" ]
+}
+
 app_dir() {
     local deploy
     deploy=$(flatpak info --system --show-location "${APP_ID}" 2>/dev/null) || return 1
@@ -73,6 +122,68 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 }
 
+# fcadefbneo.ini is the one config every FBNeo game reads. nVidRotationAdjust
+# non-zero means "do not rotate vertical games", which is upright on a TATE
+# cabinet. 0 rotates those games for a landscape monitor. Horizontal games
+# ignore this key; switchres rotates those with the output.
+apply_fbneo_rotation() {
+    local val=0 ini ggpo data preset
+    vertical_enabled && val=1
+    data="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+    ini="${data}/config/fcadefbneo/fcadefbneo.ini"
+    ggpo="${data}/config/ggpofba/ggpofba.ini"
+    preset="${PROJECT_DIR}/hd/presets/fcadefbneo.ini"
+    if [ ! -f "$ini" ] && [ -f "$preset" ]; then
+        mkdir -p "$(dirname "$ini")"
+        cp "$preset" "$ini"
+        log "installed $(basename "$ini") from preset"
+    fi
+    set_rotation_key "$ini" "$val"
+    set_rotation_key "$ggpo" "$val"
+    log "nVidRotationAdjust ${val}"
+}
+
+set_rotation_key() {
+    local ini="$1" val="$2"
+    [ -f "$ini" ] || return 0
+    if grep -q '^nVidRotationAdjust ' "$ini"; then
+        sed -i "s/^nVidRotationAdjust .*/nVidRotationAdjust ${val}/" "$ini"
+    else
+        printf 'nVidRotationAdjust %s\n' "$val" >> "$ini"
+    fi
+}
+
+# HD must not keep a leftover ON. Delete the key; an empty value is still a
+# setting ES can show the next time the menu file exists.
+clear_fcvertical() {
+    [ -f "$BATOCERA_CONF" ] || return 0
+    grep -q '^flatpak\["Fightcade\.flatpak"\]\.fcvertical=' "$BATOCERA_CONF" 2>/dev/null || return 0
+    sed -i '/^flatpak\["Fightcade\.flatpak"\]\.fcvertical=/d' "$BATOCERA_CONF"
+    log "cleared fcvertical"
+}
+
+# Existing ini only. Do not create one on HD just to write a 0.
+force_landscape_rotation() {
+    local data ini
+    data="/userdata/saves/flatpak/data/.var/app/${APP_ID}/data"
+    ini="${data}/config/fcadefbneo/fcadefbneo.ini"
+    set_rotation_key "$ini" 0
+    set_rotation_key "${data}/config/ggpofba/ggpofba.ini" 0
+    log "nVidRotationAdjust 0"
+}
+
+# One place. HD and vertical are mutually exclusive: no menu row, no saved
+# switch, no FBNeo TATE rotation, no lobby inject.
+strip_hd_vertical() {
+    if [ -f "$ES_VERT_CFG" ]; then
+        rm -f "$ES_VERT_CFG"
+        log "removed ES VERTICAL MODE (HD)"
+    fi
+    clear_fcvertical
+    force_landscape_rotation
+    disable_vertical
+}
+
 enable_vertical() {
     local app inj
     app=$(app_dir) || { log "Fightcade Flatpak app dir not found"; return 1; }
@@ -84,9 +195,13 @@ enable_vertical() {
     }
     install -m 0644 "${SRC_DIR}/inject.js" "${inj}/inject.js"
     install -m 0644 "${SRC_DIR}/inject.css" "${inj}/inject.css"
+    # Vertical genre search scripts — copied so inject.js can find them at the
+    # fixed SRC_DIR path (/userdata/system/fightcade-flatpak/lobby); they stay
+    # in lobby/ and are not installed into inject/ (inject.js reads them from
+    # SRC_DIR directly in the page world via <script> injection).
     patch_nativefier "${app}/nativefier.json" 1
     ensure_preload_patch "${app}/lib/preload.js"
-    log "enabled (inject + rotated HTML menu)"
+    log "enabled (inject + rotated HTML menu + vertical genre search)"
 }
 
 disable_vertical() {
@@ -113,18 +228,94 @@ cmd_status() {
 }
 
 cmd_apply() {
-    if vertical_enabled; then
-        enable_vertical
-    else
-        disable_vertical
+    # HD never honors the switch. CRT is the only path that writes
+    # nVidRotationAdjust from VERTICAL MODE and rotates the lobby.
+    # Unknown display: do not strip a CRT setup we cannot see yet.
+    case "$(display_class)" in
+        hd)
+            strip_hd_vertical
+            log "HD: vertical forced off"
+            ;;
+        crt)
+            apply_fbneo_rotation
+            if vertical_enabled; then
+                enable_vertical
+            else
+                disable_vertical
+            fi
+            ;;
+        *)
+            log "display unknown: vertical left unchanged"
+            ;;
+    esac
+}
+
+cmd_fbneo_rotation() {
+    case "$(display_class)" in
+        hd)
+            clear_fcvertical
+            force_landscape_rotation
+            ;;
+        crt)
+            apply_fbneo_rotation
+            ;;
+        *)
+            log "display unknown: FBNeo rotation left unchanged"
+            ;;
+    esac
+}
+
+# EmulationStation reads es_features_*.cfg only at startup.
+# sync-menu              detect from the live display
+# sync-menu hd|crt       force that mode (mode switcher calls this before reboot,
+#                        while the display is still the old one)
+# sync-menu hd norestart change the file and do not kill ES
+cmd_sync_menu() {
+    local changed=0 class restart=1
+    case "$1" in
+        hd|crt) class="$1" ;;
+        *) class=$(display_class) ;;
+    esac
+    [ "$2" = "norestart" ] && restart=0
+    log "display ${class}"
+    case "$class" in
+        crt)
+            if [ -f "$ES_VERT_SRC" ]; then
+                if [ ! -f "$ES_VERT_CFG" ] || ! cmp -s "$ES_VERT_SRC" "$ES_VERT_CFG"; then
+                    mkdir -p "$(dirname "$ES_VERT_CFG")"
+                    install -m 0644 "$ES_VERT_SRC" "$ES_VERT_CFG"
+                    changed=1
+                    log "ES VERTICAL MODE installed (CRT)"
+                fi
+            fi
+            ;;
+        hd)
+            if [ -f "$ES_VERT_CFG" ]; then
+                rm -f "$ES_VERT_CFG"
+                changed=1
+                log "ES VERTICAL MODE removed (HD)"
+            fi
+            clear_fcvertical
+            force_landscape_rotation
+            disable_vertical
+            ;;
+        *)
+            log "display unknown: ES VERTICAL MODE left unchanged"
+            ;;
+    esac
+    if [ "$changed" = 1 ] && [ "$restart" = 1 ] && pgrep -f '[e]mulationstation' >/dev/null 2>&1; then
+        log "restarting EmulationStation so Advanced Game Options matches the display"
+        killall -9 emulationstation 2>/dev/null || true
     fi
 }
 
 case "${1:-}" in
-    apply)  cmd_apply ;;
-    status) cmd_status ;;
+    apply)          cmd_apply ;;
+    status)         cmd_status ;;
+    fbneo-rotation) cmd_fbneo_rotation ;;
+    sync-menu)      cmd_sync_menu "${2:-}" "${3:-}" ;;
     *)
-        printf 'Usage: fightcade-lobby-vertical apply|status\n' >&2
+        printf 'Usage: fightcade-lobby-vertical apply|status|fbneo-rotation|sync-menu\n' >&2
         exit 2
         ;;
 esac

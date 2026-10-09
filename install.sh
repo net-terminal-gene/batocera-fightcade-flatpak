@@ -15,7 +15,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css lobby/vertical-allowlist.js lobby/vertical-search.js input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg emulationstation/es_features_fightcade_vertical.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -328,11 +328,15 @@ install_pad_mouse_config() {
   fi
 }
 
+# How many characters of a lobby-chat line the Advanced Game Options row shows
+# before it ends with "...". The on-screen keyboard still opens with the full line.
+LOBBY_CHAT_MENU_LIMIT=16
+
 seed_lobby_chat_settings() {
   # Seed the per-game EDIT LOBBY CHAT keys from the current chat config so the
-  # Advanced Game Options fields show the active macros instead of blanks. Only
-  # seed a key that is ABSENT so a value the user already set in ES is never
-  # clobbered, and the first launch after install does not wipe the defaults.
+  # Advanced Game Options fields show the active macros instead of blanks, and
+  # so the on-screen keyboard opens with that text. Only seed a key that is
+  # ABSENT so a value the user already set in ES is never clobbered.
   local conf="/userdata/system/configs/fightcade-lobby-chat.conf"
   local bconf="/userdata/system/batocera.conf"
   local slot key val line seeded=0
@@ -344,22 +348,124 @@ seed_lobby_chat_settings() {
     line=$(grep -E "^${slot}=" "${conf}" | tail -1) || true
     [ -n "${line}" ] || continue
     val="${line#*=}"
-    batocera-settings-set "${key}" "${val}" 2>/dev/null || true
+    batocera-settings-set "${key}" "${val}" || warn "Could not seed ${key}"
     seeded=1
   done
   [ "${seeded}" -eq 1 ] && ok "EDIT LOBBY CHAT fields seeded from ${conf}" || true
 }
 
+apply_lobby_chat_menu_labels() {
+  # ES draws the full saved line on the right of each EDIT LOBBY CHAT row and
+  # opens the keyboard with that same full line. When the line is longer than
+  # LOBBY_CHAT_MENU_LIMIT, also put a capped preview on the row title so it
+  # ends with "...". Prefer the batocera.conf key (what ES saved) and fall
+  # back to the chat config. Rewrites names from the plain slot title each
+  # time, so a short line does not keep a stale preview.
+  local cfg="$1"
+  local conf="/userdata/system/configs/fightcade-lobby-chat.conf"
+  local bconf="/userdata/system/batocera.conf"
+  [ -f "${cfg}" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local rc=0
+  LOBBY_CHAT_MENU_LIMIT="${LOBBY_CHAT_MENU_LIMIT}" \
+  LOBBY_CHAT_CONF="${conf}" \
+  BATOCERA_CONF="${bconf}" \
+  python3 - "${cfg}" <<'PY' || rc=$?
+import os, re, sys
+limit = int(os.environ.get("LOBBY_CHAT_MENU_LIMIT", "16"))
+conf = os.environ.get("LOBBY_CHAT_CONF", "")
+bconf = os.environ.get("BATOCERA_CONF", "")
+cfg = sys.argv[1]
+labels = (
+    ("south", "SOUTH"),
+    ("east", "EAST"),
+    ("west", "WEST"),
+    ("north", "NORTH"),
+    ("r2", "R2"),
+)
+
+def last_value(path, prefix):
+    found = None
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith(prefix):
+                found = line[len(prefix):].rstrip("\r\n")
+    return found
+
+def preview(val):
+    if len(val) <= limit:
+        return val
+    return val[:limit] + "..."
+
+def esc(s):
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
+              .replace(">", "&gt;").replace('"', "&quot;"))
+
+with open(cfg, encoding="utf-8") as fh:
+    text = fh.read()
+orig = text
+for slot, label in labels:
+    bval = last_value(bconf, 'flatpak["Fightcade.flatpak"].fclobby_%s=' % slot)
+    cval = last_value(conf, slot + "=")
+    val = bval if bval is not None else (cval or "")
+    name = label if len(val) <= limit else esc(label + "  " + preview(val))
+    pat = re.compile(
+        r'(<feature\s+name=")[^"]*("\s+group="EDIT LOBBY CHAT"\s+value="fclobby_%s")' % slot
+    )
+    text = pat.sub(lambda m, name=name: m.group(1) + name + m.group(2), text, count=1)
+if text == orig:
+    sys.exit(0)
+with open(cfg, "w", encoding="utf-8") as fh:
+    fh.write(text)
+sys.exit(10)
+PY
+  if [ "${rc}" -eq 10 ]; then
+    ES_FEATURES_CHANGED=1
+    ok "EDIT LOBBY CHAT rows show the current line (cut at ${LOBBY_CHAT_MENU_LIMIT} characters)"
+  elif [ "${rc}" -ne 0 ]; then
+    warn "Could not refresh EDIT LOBBY CHAT row labels (python exit ${rc})"
+  fi
+}
+
 ES_FEATURES_CHANGED=0
+
+# Same CRT vs HD rule as fightcade-lobby-vertical is_crt.
+# Wayland / HD is never CRT, so a Steam Deck install does not get the toggle.
+fightcade_is_crt() {
+  local disable="/userdata/system/configs/fightcade-switchres.disable"
+  local force="/userdata/system/configs/fightcade-switchres.force"
+  [ -f "$disable" ] && return 1
+  [ -f "$force" ] && return 0
+  local dm w=""
+  dm=$(batocera-resolution getDisplayMode 2>/dev/null || true)
+  [ "$dm" = "xorg" ] || return 1
+  w=$(DISPLAY=:0 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9][0-9]*\) x .*/\1/p' | head -1)
+  if [ -z "$w" ]; then
+    w=$(DISPLAY=:0 batocera-resolution currentResolution 2>/dev/null | head -1)
+    w="${w%%x*}"
+  fi
+  case "$w" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$w" -lt 1024 ] && [ -x /usr/bin/switchres ]
+}
+
 install_es_features() {
   # Batocera merges es_features_*.cfg from this dir with the system es_features.cfg
   # at EmulationStation startup. Dropping our additive file here adds the per-game
   # Fightcade toggles to the flatpak emulator's Advanced Game Options without
   # touching the read-only /usr/share copy. ES only reads it at startup, so a change
   # here means ES must be restarted for the toggle to appear/update.
+  #
+  # VERTICAL MODE lives in a second file and is installed only on CRT. HD machines
+  # never get that file, so the switch is not listed in Advanced Game Options.
   local src="${PROJECT_DIR}/emulationstation/es_features_fightcade.cfg"
+  local vert_src="${PROJECT_DIR}/emulationstation/es_features_fightcade_vertical.cfg"
   local dir="/userdata/system/configs/emulationstation"
   local dst="${dir}/es_features_fightcade.cfg"
+  local vert_dst="${dir}/es_features_fightcade_vertical.cfg"
   [ -f "${src}" ] || { warn "es_features_fightcade.cfg missing; Fightcade toggles will not appear"; return 0; }
   mkdir -p "${dir}"
   if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
@@ -369,6 +475,22 @@ install_es_features() {
     ES_FEATURES_CHANGED=1
     ok "ES Fightcade features installed at ${dst}"
   fi
+  if fightcade_is_crt && [ -f "${vert_src}" ]; then
+    if [ -f "${vert_dst}" ] && cmp -s "${vert_src}" "${vert_dst}"; then
+      ok "ES VERTICAL MODE: ${vert_dst} (CRT, unchanged)"
+    else
+      install -m 0644 "${vert_src}" "${vert_dst}"
+      ES_FEATURES_CHANGED=1
+      ok "ES VERTICAL MODE installed (CRT only) at ${vert_dst}"
+    fi
+  elif [ -f "${vert_dst}" ]; then
+    rm -f "${vert_dst}"
+    ES_FEATURES_CHANGED=1
+    ok "ES VERTICAL MODE removed (HD: toggle is hidden)"
+  else
+    ok "ES VERTICAL MODE omitted (HD: toggle is hidden)"
+  fi
+  apply_lobby_chat_menu_labels "${dst}"
 }
 
 restart_emulationstation() {
@@ -618,7 +740,7 @@ for file in ${FILES}; do
     dest_dir=$(dirname "${PROJECT_DIR}/${file}")
     mkdir -p "${dest_dir}"
     case "${file}" in
-        *.ini|*.conf|*/emu.cfg|lobby/*) mode=0644 ;;
+        *.ini|*.conf|*.cfg|*/emu.cfg|lobby/*) mode=0644 ;;
         *) mode=0755 ;;
     esac
     install -m "${mode}" "${TMP_DIR}/${file}" "${PROJECT_DIR}/${file}"
@@ -634,6 +756,64 @@ ok "Scripts installed to ${PROJECT_DIR}"
 # Install game hook into Batocera user scripts directory
 install -m 0755 "${PROJECT_DIR}/fightcade-game-hook" "${SCRIPTS_DIR}/fightcade-game-hook"
 ok "Game hook installed to ${SCRIPTS_DIR}/fightcade-game-hook"
+
+# /userdata/system/scripts only runs on gameStart/gameStop. The menu file has
+# to be right before EmulationStation launches. emulationstation-standalone
+# runs custom-es-config at that moment.
+install_vertical_boot_hook() {
+  local hook="/userdata/system/custom-es-config"
+  local marker="# fightcade-vertical-sync"
+  local block
+  block=$(cat <<EOF
+${marker}
+if [ -x ${PROJECT_DIR}/fightcade-lobby-vertical ]; then
+  ${PROJECT_DIR}/fightcade-lobby-vertical sync-menu >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
+fi
+EOF
+)
+  if [ ! -f "${hook}" ]; then
+    printf '#!/bin/bash\n%s\n' "${block}" > "${hook}"
+    chmod 755 "${hook}"
+    ok "VERTICAL MODE boot hook installed at ${hook}"
+  elif grep -q "${marker}" "${hook}"; then
+    ok "VERTICAL MODE boot hook already in ${hook}"
+  else
+    printf '\n%s\n' "${block}" >> "${hook}"
+    chmod 755 "${hook}"
+    ok "VERTICAL MODE boot hook appended to ${hook}"
+  fi
+}
+install_vertical_boot_hook
+
+# Wayland HD has no xrandr, so emulationstation-standalone skips custom-es-config.
+# labwc autostart is what launches ES on the Steam Deck HD boot.
+install_vertical_wayland_hook() {
+  local auto="/userdata/system/.config/labwc/autostart"
+  local marker="# fightcade-vertical-sync"
+  local block
+  block=$(cat <<EOF
+${marker}
+if [ -x ${PROJECT_DIR}/fightcade-lobby-vertical ]; then
+  ${PROJECT_DIR}/fightcade-lobby-vertical sync-menu >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
+fi
+EOF
+)
+  [ -f "${auto}" ] || return 0
+  if grep -q "${marker}" "${auto}"; then
+    ok "VERTICAL MODE Wayland hook already in ${auto}"
+    return 0
+  fi
+  awk -v block="${block}" '
+    $0 ~ /emulationstation-standalone/ && !done {
+      print block
+      done=1
+    }
+    { print }
+  ' "${auto}" > "${auto}.tmp" && mv "${auto}.tmp" "${auto}"
+  chmod 755 "${auto}"
+  ok "VERTICAL MODE Wayland hook installed in ${auto}"
+}
+install_vertical_wayland_hook
 
 # Apply Flatpak filesystem overrides
 apply_overrides

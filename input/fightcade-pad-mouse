@@ -33,6 +33,10 @@ except ImportError:
     HAS_EVDEV = False
 
 PIDFILE = "/tmp/fightcade-pad-mouse.pid"
+# Written by fightcade-crt-switchres while a vertical FBNeo session has the
+# output rotated. X coordinates already match the tube, so the lobby transform
+# must not run on top of that.
+VERT_DISPLAY_FLAG = "/tmp/fightcade-fbneo-vertical-rotate"
 LOCKFILE = "/tmp/fightcade-pad-mouse.lock"
 LOGFILE = "/tmp/pad-mouse.log"
 DISABLE = "/userdata/system/configs/fightcade-pad-mouse.disable"
@@ -1576,6 +1580,26 @@ def crt_switchres_active() -> bool:
     return False
 
 
+def lobby_vertical_enabled() -> bool:
+    """True when the per-game vertical/TATE lobby switch is on.
+
+    The lobby is rotated 90 deg CW by the inject CSS (see lobby/inject.js), but the
+    X server stays landscape, so raw cursor deltas move along the wrong physical
+    axis. When this is on, run_loop rotates the cursor delta to match.
+    """
+    try:
+        out = subprocess.run(
+            ["batocera-settings-get", 'flatpak["Fightcade.flatpak"].fcvertical'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return out.stdout.strip() == "1"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def desktop_width_from_xrandr(display: str) -> int | None:
     """Read-only desktop width; never call batocera-resolution from the 60 Hz loop.
 
@@ -2680,6 +2704,7 @@ def pad_has_meaningful_input(
 
 def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
     display = pick_display()
+    vertical_mode = lobby_vertical_enabled()
     deadzone = int(cfg["deadzone"])
     deadzone_8bit = int(cfg.get("deadzone_8bit", DEFAULTS["deadzone_8bit"]))
     max_speed_hd, slow_speed_hd = resolve_cursor_speeds(cfg, hd_mode=True)
@@ -2721,6 +2746,7 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
         f"gamepads: {labels} on DISPLAY={display} "
         f"(SELECT+WEST pause, SELECT+NORTH resume; "
         f"cursor profile={'CRT' if crt_cursor_profile(display) else 'HD'}; "
+        f"vertical={'on' if vertical_mode else 'off'}; "
         f"HD {max_speed_hd}/{slow_speed_hd} menu {max_speed_hd_menu}/{slow_speed_hd_menu} "
         f"CRT {max_speed_crt}/{slow_speed_crt} lobby {resolve_cursor_speeds(cfg, False, lobby_mode=True)[0]}/"
         f"{resolve_cursor_speeds(cfg, False, lobby_mode=True)[1]} "
@@ -3368,6 +3394,14 @@ def run_loop(pads: list[tuple[str, str]], cfg: dict) -> None:
                     if deck_hd:
                         frac_x = 0.0
                         frac_y = 0.0
+                if vertical_mode and not os.path.isfile(VERT_DISPLAY_FLAG):
+                    # Lobby is rotated 90 deg CW but X stays landscape. Rotate the
+                    # cursor delta so pad-right moves physical-right, etc.
+                    # screen = translate(winW,0) rotate(90) scale: (dx,dy) -> (-dy,dx).
+                    # Skip this while FBNeo has xrandr-rotated the output: X already
+                    # matches the tube, and a second transform would aim the cursor
+                    # the wrong way in the in-game menu.
+                    dx, dy = -dy, dx
                 move_mouse(dx, dy, xdotool)
     finally:
         if left_held:
