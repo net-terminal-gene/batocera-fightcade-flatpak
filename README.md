@@ -176,6 +176,7 @@ Most issues while navigating with a gamepad have a quick fix:
 
 | Problem | Fix |
 |---------|-----|
+| **Fightcade takes a long time to open** | Turn off **ROM SYNC ON LAUNCH** in Advanced Game Options (on by default). Turn it back on after you add ROMs. |
 | **No pad cursor after opening the in-game menu** | Press **SELECT + WEST** again to bring the cursor back. |
 | **Clicks not landing on a window or dialog** | Press **SELECT + R1** a few times to focus the window you are pointing at (Alt+Tab). |
 | **Can't get back to the full-screen game** | Press **SELECT + NORTH** (resume / fullscreen, HD and CRT). |

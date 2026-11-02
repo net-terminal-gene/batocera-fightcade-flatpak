@@ -452,7 +452,7 @@ if [ -f "${LABWC_AUTOSTART}" ] && grep -q '# fightcade-vertical-sync' "${LABWC_A
 fi
 
 # Per-game Fightcade keys written to batocera.conf (videomode, fclobby_*,
-# fccursor_*, fcdebug, fcvertical). Delete every flatpak["Fightcade.flatpak"].*
+# fccursor_*, fcdebug, fcromsync, fcvertical). Delete every flatpak["Fightcade.flatpak"].*
 # line so no Fightcade setting survives. Real ROM/BIOS keys are untouched.
 BCONF="/userdata/system/batocera.conf"
 if [ -f "${BCONF}" ] && grep -q 'flatpak\["Fightcade.flatpak"\]\.' "${BCONF}" 2>/dev/null; then

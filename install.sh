@@ -332,6 +332,20 @@ install_pad_mouse_config() {
 # before it ends with "...". The on-screen keyboard still opens with the full line.
 LOBBY_CHAT_MENU_LIMIT=16
 
+seed_roms_sync_setting() {
+  # ROM SYNC ON LAUNCH defaults ON. ES switches render OFF until a key exists,
+  # so seed 1 when the key is absent. Never overwrite a value the user set.
+  local key='flatpak["Fightcade.flatpak"].fcromsync'
+  local bconf="/userdata/system/batocera.conf"
+  command -v batocera-settings-set >/dev/null 2>&1 || return 0
+  grep -Fq -- "${key}=" "${bconf}" 2>/dev/null && return 0
+  if batocera-settings-set "${key}" "1"; then
+    ok "ROM SYNC ON LAUNCH seeded on"
+  else
+    warn "Could not seed ${key}"
+  fi
+}
+
 seed_lobby_chat_settings() {
   # Seed the per-game EDIT LOBBY CHAT keys from the current chat config so the
   # Advanced Game Options fields show the active macros instead of blanks, and
@@ -749,6 +763,7 @@ record_install_branch
 link_cli_tools "${PROJECT_DIR}"
 install_chat_config
 seed_lobby_chat_settings
+seed_roms_sync_setting
 install_pad_mouse_config
 install_es_features
 ok "Scripts installed to ${PROJECT_DIR}"

@@ -30,6 +30,7 @@ CONFIGS_DIR="/userdata/system/configs"
 
 SWITCHRES_LOG="${LOGS_DIR}/fightcade-crt-switchres.log"
 INSTALL_LOG="${LOGS_DIR}/fightcade-flatpak-install.log"
+LAUNCH_LOG="${LOGS_DIR}/fightcade-launch.log"
 PADMOUSE_LOG="/tmp/pad-mouse.log"
 ZOOM_LOG="/tmp/fightcade-lobby-zoom.log"
 
@@ -156,6 +157,13 @@ collect_kill_switches() {
         echo
         echo "-- lobby-zoom.conf --"
         cat "${CONFIGS_DIR}/fightcade-lobby-zoom.conf" 2>/dev/null || echo "(no lobby-zoom.conf)"
+        echo
+        echo "-- ROM SYNC ON LAUNCH (fcromsync) --"
+        if grep -Fq -- 'flatpak["Fightcade.flatpak"].fcromsync=' /userdata/system/batocera.conf 2>/dev/null; then
+            grep -F -- 'flatpak["Fightcade.flatpak"].fcromsync=' /userdata/system/batocera.conf | tail -1
+        else
+            echo "absent (default ON)"
+        fi
     } > "$f"
     say "  captured 01-config-flags.txt"
 }
@@ -276,6 +284,7 @@ collect_emu_configs() {
 collect_logs() {
     copy_if "$SWITCHRES_LOG" "log-fightcade-crt-switchres.log"
     copy_if "$INSTALL_LOG"   "log-fightcade-flatpak-install.log"
+    copy_if "$LAUNCH_LOG"    "log-fightcade-launch.log"
     copy_if "$PADMOUSE_LOG"  "log-pad-mouse.log"
     copy_if "$ZOOM_LOG"      "log-fightcade-lobby-zoom.log"
     # es launch logs sometimes hold the fcade:// dispatch trail
