@@ -113,6 +113,16 @@ parse_mame_xml_dims() {
     [ -n "$W" ] && [ -n "$H" ] && [ -n "$R" ]
 }
 
+# Parents: romof="neogeo". Clones/bootlegs: romof="<parent>" (svcsplus → svc)
+# so romof=neogeo misses them. The runnable machine's sourcefile is still
+# neogeo*.cpp. Width stays per zip via neogeo-fbneo-320.roms, not the parent.
+xml_is_neogeo() {
+    local xml="$1" line
+    line=$(echo "$xml" | grep '<machine ' | grep -v 'isdevice="yes"' | head -1)
+    [ -n "$line" ] || return 1
+    echo "$line" | grep -qE 'romof="neogeo"|sourcefile="[^"]*neogeo'
+}
+
 resolve_rom_dims() {
     local emu="$1" rom="$2"
     local full_xml display_xml mame_rom="$rom"
@@ -144,7 +154,7 @@ resolve_rom_dims() {
         # Neo Geo: do not use MAME's 320 raster for every cart. FBNeo's
         # per-game visible size is 304 or 320. Default 304; 320 only if
         # the ROM is in neogeo-fbneo-320.roms (lastbld2, rbff1, breakrev, ...).
-        if echo "$full_xml" | grep -q 'romof="neogeo"'; then
+        if xml_is_neogeo "$full_xml"; then
             if [ -f "$NEOGEO_320_ROMS" ] && grep -qx "$mame_rom" "$NEOGEO_320_ROMS"; then
                 W=320
             else
