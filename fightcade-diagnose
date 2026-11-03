@@ -118,6 +118,11 @@ fi
 hook="${SCRIPTS_DIR}/fightcade-game-hook"
 if [ -x "$hook" ]; then
     pass "game hook: ${hook}"
+    if head -1 "$hook" 2>/dev/null | grep -q python; then
+        info "gameStart mode: async wrapper (Batocera v44+ install path)"
+    else
+        info "gameStart mode: synchronous (Batocera v43 and older install path)"
+    fi
 else
     fail "game hook missing or not executable: ${hook}"
     any_fail=1

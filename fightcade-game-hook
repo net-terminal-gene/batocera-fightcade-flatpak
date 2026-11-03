@@ -169,6 +169,11 @@ else
     exit 0
 fi
 
+# batocera-launch (v44) runs user scripts with stdout/stderr piped and waits on
+# communicate(). Background jobs that inherit those fds can block flatpak start
+# for minutes even after hook_log shows gameStart end. Detach before any work.
+exec 1>/dev/null 2>/dev/null
+
 if [ "$EVENT" = "gameStop" ]; then
     # When debug logging was on this session, auto-write ONE plain-text report to
     # /userdata/system/logs/fightcade-debug-*.txt so a non-terminal user can grab it
@@ -248,5 +253,7 @@ if [ -x "$CRT_HOSTD" ]; then
     [ -S /tmp/.X11-unix/X0 ] || FC_DISPLAY=":0.0"
     setsid env DISPLAY="$FC_DISPLAY" "$CRT_HOSTD" ensure >/dev/null 2>&1 </dev/null &
 fi
+
+disown -a 2>/dev/null || true
 
 hook_log "gameStart end total=$(($(date +%s) - hook_t0))s"

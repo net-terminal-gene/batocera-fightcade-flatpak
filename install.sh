@@ -15,7 +15,7 @@ SCRIPTS_DIR="/userdata/system/scripts"
 LOG_DIR="/userdata/system/logs"
 
 # Files fetched from the repo and installed to PROJECT_DIR.
-FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css lobby/vertical-allowlist.js lobby/vertical-search.js input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg emulationstation/es_features_fightcade_vertical.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
+FILES="install.sh fightcade-roms-sync fightcade-game-hook fightcade-game-hook-es fightcade-lobby-zoom fightcade-lobby-vertical lobby/inject.js lobby/inject.css lobby/vertical-allowlist.js lobby/vertical-search.js input/fightcade-pad-mouse input/fightcade-pad-mouse.conf input/fightcade-lobby-chat.conf input/fightcade-cursor crt/fightcade-crt-block-pad-kbd crt/fightcade-crt-switchres crt/fightcade-crt-hostd crt/fightcade-crt-recover crt/patch-flatpak-xdg-open.sh hd/patch-hd-video.sh hd/presets/fcadefbneo.ini hd/presets/fcadesnes9x.conf hd/presets/flycast/emu.cfg emulationstation/es_features_fightcade.cfg emulationstation/es_features_fightcade_vertical.cfg fightcade-diagnose fightcade-collect-logs uninstall.sh"
 
 # Artwork fetched from the repo and installed to the ES flatpak images dir.
 ART_FILES="images/Fightcade.png images/Fightcade-logo.png images/Fightcade-thumb.png"
@@ -588,6 +588,96 @@ apply_overrides() {
     done
 }
 
+batocera_major_version() {
+    local ver=""
+    if [ -f /usr/share/batocera/batocera.version ]; then
+        ver=$(head -1 /usr/share/batocera/batocera.version | tr -d '[:space:]')
+    fi
+    ver=${ver#v}
+    ver=${ver%%-*}
+    ver=${ver%%.*}
+    if [ -n "${ver}" ] && [ "${ver}" -eq "${ver}" ] 2>/dev/null; then
+        printf '%s' "${ver}"
+    else
+        printf '%s' "0"
+    fi
+}
+
+install_es_game_hook() {
+    install -m 0755 "${PROJECT_DIR}/fightcade-game-hook" "${PROJECT_DIR}/fightcade-game-hook"
+    local major
+    major=$(batocera_major_version)
+    if [ "${major}" -ge 44 ] 2>/dev/null; then
+        install -m 0755 "${PROJECT_DIR}/fightcade-game-hook-es" "${SCRIPTS_DIR}/fightcade-game-hook"
+        ok "Game hook installed for Batocera v${major}: async gameStart wrapper -> ${SCRIPTS_DIR}/fightcade-game-hook"
+    else
+        install -m 0755 "${PROJECT_DIR}/fightcade-game-hook" "${SCRIPTS_DIR}/fightcade-game-hook"
+        ok "Game hook installed for Batocera v${major}: synchronous hook -> ${SCRIPTS_DIR}/fightcade-game-hook"
+    fi
+}
+
+ensure_wine_prefix() {
+    # FBNeo/SNES9x run under Wine inside the Flatpak. A broken prefix (kernel32
+    # c0000135 with files still on disk) can happen on first boot; rebuild it here
+    # so fresh installs can play arcade without manual SSH.
+    notice "Checking Fightcade Wine prefix (FBNeo and other Wine emulators)..."
+    local out
+    out=$(flatpak run --command=sh "${APP_ID}" -c '
+        set -eu
+        export WINEDEBUG=-all
+        wine_tag=""
+        if wine --version >/dev/null 2>&1; then
+            wine_tag=$(wine --version 2>/dev/null | awk "{print \$1}")
+        fi
+        prefix=""
+        for d in /var/data/wineprefixes/*/; do
+            [ -f "${d}system.reg" ] && prefix="${d%/}" && break
+        done
+        if [ -z "$prefix" ] && [ -n "$wine_tag" ]; then
+            prefix="/var/data/wineprefixes/${wine_tag}"
+        fi
+        if [ -z "$prefix" ]; then
+            echo "NO_WINE"
+            exit 0
+        fi
+        wine_ok() {
+            export WINEPREFIX="$1"
+            wine cmd /c "echo WINE_OK" 2>/dev/null | grep -q WINE_OK
+        }
+        if [ -d "$prefix" ] && [ -f "$prefix/system.reg" ]; then
+            if wine_ok "$prefix"; then
+                echo "HEALTHY $prefix"
+                exit 0
+            fi
+            rm -rf "$prefix"
+        fi
+        mkdir -p "$(dirname "$prefix")"
+        export WINEPREFIX="$prefix"
+        export WINEARCH=win64
+        if ! wineboot --init >/dev/null 2>&1; then
+            echo "INIT_FAILED $prefix"
+            exit 0
+        fi
+        if wine_ok "$prefix"; then
+            echo "REBUILT $prefix"
+        else
+            echo "BROKEN $prefix"
+        fi
+    ' 2>/dev/null || true)
+    case "${out}" in
+        HEALTHY*)
+            ok "Wine prefix OK (${out#HEALTHY })" ;;
+        REBUILT*)
+            ok "Wine prefix rebuilt (${out#REBUILT })" ;;
+        NO_WINE*)
+            warn "Wine not available inside the Flatpak; skip prefix check" ;;
+        INIT_FAILED*|BROKEN*)
+            warn "Could not initialize Wine prefix; launch Fightcade once, then re-run this installer if arcade games fail" ;;
+        *)
+            warn "Wine prefix check inconclusive; re-run installer if FBNeo games fail to start" ;;
+    esac
+}
+
 apply_wine_input_backend() {
     # Route Fightcade's Wine emulators through SDL/evdev instead of raw hidraw.
     # By default winebus opens /dev/hidrawN directly for the Steam Deck pad, which
@@ -595,10 +685,9 @@ apply_wine_input_backend() {
     # in-game combos. DisableHidraw=1 + Enable SDL=1 is Proton's default and keeps the
     # joystick node alive. Idempotent: wine reg add overwrites the value in place.
     #
-    # The prefix lives inside the Flatpak sandbox at /var/data/wineprefixes/<wine-ver>/
-    # and is only created on Fightcade's first launch, so on a brand-new install (pad
-    # never launched) there is nothing to edit yet; the env overrides above still apply
-    # and re-running this installer after the first launch sets the reg keys.
+    # The prefix lives inside the Flatpak sandbox at /var/data/wineprefixes/<wine-ver>/.
+    # ensure_wine_prefix() creates or repairs it during install; if Wine is still missing
+    # here, launch Fightcade once and re-run this installer.
     notice "Configuring Wine controller backend (SDL/evdev, no hidraw grab)..."
     local out
     out=$(flatpak run --command=sh "${APP_ID}" -c '
@@ -768,9 +857,8 @@ install_pad_mouse_config
 install_es_features
 ok "Scripts installed to ${PROJECT_DIR}"
 
-# Install game hook into Batocera user scripts directory
-install -m 0755 "${PROJECT_DIR}/fightcade-game-hook" "${SCRIPTS_DIR}/fightcade-game-hook"
-ok "Game hook installed to ${SCRIPTS_DIR}/fightcade-game-hook"
+# Install game hook into Batocera user scripts directory (v44+ uses async gameStart).
+install_es_game_hook
 
 # /userdata/system/scripts only runs on gameStart/gameStop. The menu file has
 # to be right before EmulationStation launches. emulationstation-standalone
@@ -833,8 +921,8 @@ install_vertical_wayland_hook
 # Apply Flatpak filesystem overrides
 apply_overrides
 
-# Route the Wine emulators' controller reads through SDL/evdev (keeps the Steam
-# Deck joystick node alive for in-game combos). Runs after the Flatpak is present.
+# Wine prefix for FBNeo + winebus controller backend (SDL/evdev, no hidraw grab).
+ensure_wine_prefix
 apply_wine_input_backend
 
 # Patch Flatpak xdg-open (fcade:// intercept; re-applied after Flatpak updates)
