@@ -137,9 +137,11 @@ resolve_rom_dims() {
     full_xml=$(mame_xml_raw "$mame_rom")
     display_xml=$(echo "$full_xml" | grep '<display ')
     if parse_mame_xml_dims "$display_xml"; then
-        if [ "$W" = "320" ] && [ "$H" = "224" ] && echo "$full_xml" | grep -q 'romof="neogeo"'; then
-            W=304
-        fi
+        # Keep MAME's reported width. A blanket Neo Geo 304 crop (8px/side)
+        # tore on 320-wide titles (lastbld2, rbff1, breakrev) while 304-native
+        # games (mslug3) were fine. RetroArch FBNeo already follows per-game
+        # size; Fightcade CRT now does the same via MAME XML (Neo Geo MVS is
+        # 320x224 @ ~59.18).
         local rot
         rot=$(echo "$display_xml" | sed -n 's/.*rotate="\([0-9]*\)".*/\1/p' | head -1)
         case "$rot" in
