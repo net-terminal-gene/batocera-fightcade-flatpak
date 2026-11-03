@@ -33,6 +33,10 @@ SNES_LAUNCH_GO="${PROJECT_DIR}/snes-launch.go"
 FLYCAST_GAME_FLAG="/tmp/fightcade-flycast-game-active"
 MONITOR_PIDFILE="/tmp/fightcade-switchres-wrap.monitor.pid"
 LOG_FILE="/userdata/system/logs/fightcade-crt-switchres.log"
+# FBNeo visible width for Neo Geo. MAME XML is 320x224 for every MVS title
+# (full raster). Fightcade FBNeo crops most games to 304x224; a smaller set
+# is 320x224. That list is crt/neogeo-fbneo-320.roms.
+NEOGEO_320_ROMS="${CRT_DIR}/neogeo-fbneo-320.roms"
 
 # Verbose logging is opt-in per game via the "FIGHTCADE DEBUG LOGGING" toggle;
 # fightcade-game-hook sets this flag at gameStart when the toggle is ON.
@@ -137,11 +141,16 @@ resolve_rom_dims() {
     full_xml=$(mame_xml_raw "$mame_rom")
     display_xml=$(echo "$full_xml" | grep '<display ')
     if parse_mame_xml_dims "$display_xml"; then
-        # Keep MAME's reported width. A blanket Neo Geo 304 crop (8px/side)
-        # tore on 320-wide titles (lastbld2, rbff1, breakrev) while 304-native
-        # games (mslug3) were fine. RetroArch FBNeo already follows per-game
-        # size; Fightcade CRT now does the same via MAME XML (Neo Geo MVS is
-        # 320x224 @ ~59.18).
+        # Neo Geo: do not use MAME's 320 raster for every cart. FBNeo's
+        # per-game visible size is 304 or 320. Default 304; 320 only if
+        # the ROM is in neogeo-fbneo-320.roms (lastbld2, rbff1, breakrev, ...).
+        if echo "$full_xml" | grep -q 'romof="neogeo"'; then
+            if [ -f "$NEOGEO_320_ROMS" ] && grep -qx "$mame_rom" "$NEOGEO_320_ROMS"; then
+                W=320
+            else
+                W=304
+            fi
+        fi
         local rot
         rot=$(echo "$display_xml" | sed -n 's/.*rotate="\([0-9]*\)".*/\1/p' | head -1)
         case "$rot" in
