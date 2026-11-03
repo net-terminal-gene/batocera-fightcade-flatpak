@@ -176,6 +176,8 @@ Most issues while navigating with a gamepad have a quick fix:
 
 | Problem | Fix |
 |---------|-----|
+| **Fightcade takes a long time to open** | **Batocera v44+:** the installer installs a thin Python wrapper so `gameStart` does not block `flatpak run` (v43 and older keep the normal hook). Re-run the installer if launches still hang for minutes. With a large ROM library, turn off **ROM SYNC ON LAUNCH** after the first sync (on by default). |
+| **Arcade / FBNeo game does not start (black screen, instant fail)** | Re-run the installer: it checks Wine and rebuilds a broken prefix automatically. Use Fightcade-format FBNeo zips in `/userdata/roms/fbneo/`, not generic MAME sets. |
 | **No pad cursor after opening the in-game menu** | Press **SELECT + WEST** again to bring the cursor back. |
 | **Clicks not landing on a window or dialog** | Press **SELECT + R1** a few times to focus the window you are pointing at (Alt+Tab). |
 | **Can't get back to the full-screen game** | Press **SELECT + NORTH** (resume / fullscreen, HD and CRT). |

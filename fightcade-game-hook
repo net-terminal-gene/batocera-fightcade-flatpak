@@ -1,7 +1,8 @@
 #!/bin/bash
 # Batocera gameStart/gameStop hook for Flatpak Fightcade.
 #
-# gameStart: ROM sync, pad-to-mouse for Fightcade UI, CRT host watcher (CRT only).
+# gameStart: ROM sync (unless ROM SYNC ON LAUNCH is off), pad-to-mouse for
+# Fightcade UI, CRT host watcher (CRT only).
 # gameStop:  stop pad-mouse + CRT host watcher and run CRT recovery.
 # Patched xdg-open writes play.pending; fightcade-crt-hostd runs dispatch on the host.
 
@@ -19,6 +20,7 @@ LOBBY_ZOOM="${PROJECT_DIR}/fightcade-lobby-zoom"
 LOBBY_VERTICAL="${PROJECT_DIR}/fightcade-lobby-vertical"
 COLLECT_LOGS="${PROJECT_DIR}/fightcade-collect-logs"
 LOG_DIR="/userdata/system/logs"
+LAUNCH_LOG="${LOG_DIR}/fightcade-launch.log"
 
 # Runtime flag the switchres wrapper and pad-mouse check for verbose logging.
 # Set from the per-game "FIGHTCADE DEBUG LOGGING" toggle (Advanced Game Options),
@@ -36,6 +38,22 @@ fightcade_debug_enabled() {
     local v
     v=$(batocera-settings-get 'flatpak["Fightcade.flatpak"].fcdebug' 2>/dev/null | tr -d '[:space:]')
     [ "$v" = "1" ]
+}
+
+# ROM SYNC ON LAUNCH (fcromsync): default ON. A missing key means sync.
+# ES OFF writes the key with an empty value; that is the only skip path.
+roms_sync_enabled() {
+    local line val
+    line=$(grep -F -- 'flatpak["Fightcade.flatpak"].fcromsync=' "$BATOCERA_CONF" 2>/dev/null | tail -1)
+    [ -n "$line" ] || return 0
+    val="${line#*=}"
+    val=$(printf '%s' "$val" | tr -d '[:space:]')
+    [ "$val" = "1" ]
+}
+
+hook_log() {
+    mkdir -p "$LOG_DIR"
+    printf '%s hook: %s\n' "$(date '+%F %T')" "$*" >> "$LAUNCH_LOG"
 }
 
 # Write one lobby-chat slot into LOBBY_CHAT_CONF from its batocera.conf key.
@@ -151,6 +169,11 @@ else
     exit 0
 fi
 
+# batocera-launch (v44) runs user scripts with stdout/stderr piped and waits on
+# communicate(). Background jobs that inherit those fds can block flatpak start
+# for minutes even after hook_log shows gameStart end. Detach before any work.
+exec 1>/dev/null 2>/dev/null
+
 if [ "$EVENT" = "gameStop" ]; then
     # When debug logging was on this session, auto-write ONE plain-text report to
     # /userdata/system/logs/fightcade-debug-*.txt so a non-terminal user can grab it
@@ -176,32 +199,47 @@ fi
 
 # --- gameStart ---
 
+hook_t0=$(date +%s)
+hook_log "gameStart begin"
+
 # Set the debug flag before pad-mouse and the CRT host watcher start, so both pick
 # up verbose logging for this session. Cleared here when the toggle is off.
+t=$(date +%s)
 if fightcade_debug_enabled; then
     : > "$FC_DEBUG_FLAG"
 else
     rm -f "$FC_DEBUG_FLAG"
 fi
+hook_log "debug-flag elapsed=$(($(date +%s) - t))s"
 
 # Push any per-game lobby-chat edits into the conf before pad-mouse starts below.
+t=$(date +%s)
 sync_lobby_chat
 sync_cursor_speed
+hook_log "lobby-chat+cursor elapsed=$(($(date +%s) - t))s"
 
 # Runs before Fightcade launches, so Chromium reads the mode-correct lobby zoom
 # from Preferences at startup. Must stay synchronous (not backgrounded).
+t=$(date +%s)
 if [ -x "$LOBBY_ZOOM" ]; then
     "$LOBBY_ZOOM" apply >>/tmp/fightcade-lobby-zoom.log 2>&1 || true
 fi
+hook_log "lobby-zoom elapsed=$(($(date +%s) - t))s"
 
 # Vertical/TATE lobby inject must be in the Nativefier app dir before Electron
 # starts. ON copies inject.js/css; OFF removes them. Synchronous on purpose.
+t=$(date +%s)
 if [ -x "$LOBBY_VERTICAL" ]; then
     "$LOBBY_VERTICAL" apply >>/tmp/fightcade-lobby-vertical.log 2>&1 || true
 fi
+hook_log "lobby-vertical elapsed=$(($(date +%s) - t))s"
 
-if [ -x "$SYNC_SCRIPT" ]; then
+t=$(date +%s)
+if [ -x "$SYNC_SCRIPT" ] && roms_sync_enabled; then
     "$SYNC_SCRIPT" --quiet
+    hook_log "roms-sync elapsed=$(($(date +%s) - t))s"
+else
+    hook_log "roms-sync skipped elapsed=$(($(date +%s) - t))s"
 fi
 
 if [ -x "$PAD_MOUSE" ] && [ ! -f /userdata/system/configs/fightcade-pad-mouse.disable ]; then
@@ -215,3 +253,7 @@ if [ -x "$CRT_HOSTD" ]; then
     [ -S /tmp/.X11-unix/X0 ] || FC_DISPLAY=":0.0"
     setsid env DISPLAY="$FC_DISPLAY" "$CRT_HOSTD" ensure >/dev/null 2>&1 </dev/null &
 fi
+
+disown -a 2>/dev/null || true
+
+hook_log "gameStart end total=$(($(date +%s) - hook_t0))s"

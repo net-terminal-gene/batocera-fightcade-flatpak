@@ -25,6 +25,11 @@ ok()     { [ "$QUIET" -eq 0 ] && printf '[ OK ] %s\n' "$*" || true; }
 notice() { [ "$QUIET" -eq 0 ] && printf '[INFO] %s\n' "$*" || true; }
 warn()   { printf '[WARN] %s\n' "$*" >&2; }
 
+LAUNCH_LOG="/userdata/system/logs/fightcade-launch.log"
+SYNC_START=$(date +%s)
+arcade_src=0
+dc_src=0
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -178,6 +183,7 @@ dc_replaced=0
 if [ -d "${DC_SRC}" ]; then
     for src_rom in "${DC_SRC}"/*.{chd,cdi}; do
         [ -e "${src_rom}" ] || continue
+        dc_src=$((dc_src + 1))
         name=$(basename "${src_rom}")
         dst_link="${DC_DST}/${name}"
 
@@ -247,6 +253,7 @@ if [ -d "$ARCADE_SRC" ]; then
     # Create or refresh links for every current zip in the source.
     for src_zip in "${ARCADE_SRC}"/*.zip; do
         [ -e "$src_zip" ] || continue
+        arcade_src=$((arcade_src + 1))
         name=$(basename "$src_zip")
         dst_link="${ARCADE_DST}/${name}"
 
@@ -382,3 +389,11 @@ BIOS: dc_boot.bin and dc_flash.bin must be copied manually to:
 /userdata/saves/flatpak/data/.var/app/com.fightcade.Fightcade/config/flycast/data/"
 
 ok "fightcade-roms-sync complete"
+
+mkdir -p "$(dirname "$LAUNCH_LOG")"
+printf '%s roms-sync arcade_src=%s arcade_added=%s arcade_pruned=%s dc_src=%s dc_added=%s dc_replaced=%s dc_pruned=%s elapsed=%ss\n' \
+    "$(date '+%F %T')" \
+    "$arcade_src" "$added" "$pruned" \
+    "$dc_src" "$dc_added" "$dc_replaced" "$dc_pruned" \
+    "$(( $(date +%s) - SYNC_START ))" \
+    >> "$LAUNCH_LOG"

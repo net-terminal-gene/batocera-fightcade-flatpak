@@ -71,9 +71,9 @@ does not change; only which physical button you assign to each slot changes.
 
 ### Advanced Game Options
 
-The Fightcade toggles (**CURSOR SPEED**, **FIGHTCADE DEBUG LOGGING**, lobby chat
-macros) live in the Fightcade entry's **Advanced Game Options** in
-EmulationStation: highlight **Fightcade** in the game list and press the
+The Fightcade toggles (**CURSOR SPEED**, **FIGHTCADE DEBUG LOGGING**, **ROM SYNC ON
+LAUNCH**, lobby chat macros) live in the Fightcade entry's **Advanced Game Options**
+in EmulationStation: highlight **Fightcade** in the game list and press the
 game-options button. On CRT, **VERTICAL MODE** is listed there too. You will not
 see that switch in HD. See [CRT vertical lobby](CRT-VERTICAL.md).
 
@@ -81,6 +81,13 @@ see that switch in HD. See [CRT vertical lobby](CRT-VERTICAL.md).
 > After changing a setting, back **all the way out** of the menu to the game list,
 > then launch Fightcade from there. Do **not** use the **LAUNCH** entry inside the
 > options menu, or the game starts before your change is saved.
+
+### ROM sync on launch
+
+**ROM SYNC ON LAUNCH** is **on** by default. Each Fightcade start links new arcade
+zips and Dreamcast files from `/userdata/roms`. That scan can slow the launch on a
+large library. Turn it **off** for a faster open. After you add ROMs, turn it **on**
+for one launch so they get linked, then you can turn it off again.
 
 ### Cursor speed
 

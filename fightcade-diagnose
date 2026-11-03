@@ -118,6 +118,11 @@ fi
 hook="${SCRIPTS_DIR}/fightcade-game-hook"
 if [ -x "$hook" ]; then
     pass "game hook: ${hook}"
+    if head -1 "$hook" 2>/dev/null | grep -q python; then
+        info "gameStart mode: async wrapper (Batocera v44+ install path)"
+    else
+        info "gameStart mode: synchronous (Batocera v43 and older install path)"
+    fi
 else
     fail "game hook missing or not executable: ${hook}"
     any_fail=1
@@ -322,6 +327,15 @@ fi
 
 if [ -f /userdata/system/configs/fightcade-pad-mouse.disable ]; then
     info "pad-mouse disabled via fightcade-pad-mouse.disable"
+fi
+
+fcromsync_line=$(grep -F -- 'flatpak["Fightcade.flatpak"].fcromsync=' /userdata/system/batocera.conf 2>/dev/null | tail -1)
+fcromsync_val="${fcromsync_line#*=}"
+fcromsync_val=$(printf '%s' "$fcromsync_val" | tr -d '[:space:]')
+if [ -z "$fcromsync_line" ] || [ "$fcromsync_val" = "1" ]; then
+    info "ROM SYNC ON LAUNCH: on (fightcade-roms-sync runs at gameStart)"
+else
+    info "ROM SYNC ON LAUNCH: off (launch skips fightcade-roms-sync)"
 fi
 
 # ---------------------------------------------------------------------------
