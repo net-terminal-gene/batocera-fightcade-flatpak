@@ -717,19 +717,33 @@ crt_resume_snes9x_menu() {
     fightcade_cursor_hide
 }
 
+# Flycast resolves dojo:GameEntry as <content path>/<name>.zip (or the
+# filename from flycast_roms.json). The installer keeps Naomi, Naomi 2, and
+# Atomiswave in subfolders, so those paths have to be listed or every launch
+# opens the game list. Semicolon-separated, matching Flycast's ContentPath.
+flycast_content_path() {
+    local root="/app/fightcade/Fightcade/emulator/flycast/ROMs"
+    printf '%s;%s/naomi;%s/naomi2;%s/atomiswave' "$root" "$root" "$root" "$root"
+}
+
 patch_flycast_cfg() {
-    local cfg="$1"
+    local cfg="$1" path
     [ -f "$cfg" ] || return 0
-    cp "$cfg" "${cfg}.bak.switchres"
+    # Edit keys in place. A full-file snapshot put back on quit discarded
+    # Flycast menu changes (geometry is rend.ScreenStretching) and could put
+    # an older ContentPath back before the next launch.
     sed -i 's/^fullscreen = .*/fullscreen = yes/' "$cfg"
     sed -i 's/^rend\.vsync = .*/rend.vsync = yes/' "$cfg"
+    path=$(flycast_content_path)
+    if grep -q '^Dreamcast\.ContentPath = ' "$cfg"; then
+        sed -i "s|^Dreamcast\\.ContentPath = .*|Dreamcast.ContentPath = ${path}|" "$cfg"
+    fi
 }
 
 restore_flycast_cfg() {
     local cfg="$1"
-    if [ -f "${cfg}.bak.switchres" ]; then
-        mv -f "${cfg}.bak.switchres" "$cfg"
-    fi
+    # Drop a snapshot left by older builds. Do not copy it over emu.cfg.
+    rm -f "${cfg}.bak.switchres"
 }
 
 display_matches_snapshot() {

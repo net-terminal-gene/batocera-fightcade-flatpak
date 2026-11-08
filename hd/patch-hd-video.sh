@@ -111,7 +111,14 @@ patch_flycast_hd_cfg() {
     sed -i 's/^rend\.vsync = .*/rend.vsync = yes/' "$cfg"
     sed -i "s/^width = .*/width = ${HD_WIDTH}/" "$cfg"
     sed -i "s/^height = .*/height = ${HD_HEIGHT}/" "$cfg"
-    log "flycast cfg: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, vsync on"
+    # Same paths as fightcade-crt-switchres flycast_content_path. Naomi,
+    # Naomi 2, and Atomiswave zips live in those subfolders.
+    local root="/app/fightcade/Fightcade/emulator/flycast/ROMs"
+    local path="${root};${root}/naomi;${root}/naomi2;${root}/atomiswave"
+    if grep -q '^Dreamcast\.ContentPath = ' "$cfg"; then
+        sed -i "s|^Dreamcast\\.ContentPath = .*|Dreamcast.ContentPath = ${path}|" "$cfg"
+    fi
+    log "flycast cfg: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, vsync on, content paths set"
 }
 
 detect_display_resolution
