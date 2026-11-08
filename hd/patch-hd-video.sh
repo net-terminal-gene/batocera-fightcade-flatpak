@@ -104,6 +104,24 @@ patch_snes9x_hd_conf() {
     log "snes9x conf: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, vsync, config unlocked"
 }
 
+# Flycast's own default is Stats = yes, which draws the GGPO Delay/Ping bar.
+# Apply Stats = no once. After that, the Netplay checkbox is left alone.
+ensure_flycast_stats_default() {
+    local cfg="$1"
+    local stamp="${cfg}.fightcade-default-stats"
+    [ -f "$cfg" ] || return 0
+    if ! grep -q '^Stats = ' "$cfg"; then
+        if grep -q '^\[network\]' "$cfg"; then
+            sed -i '/^\[network\]/a Stats = no' "$cfg"
+        else
+            printf '\n[network]\nStats = no\n' >> "$cfg"
+        fi
+    elif [ ! -f "$stamp" ]; then
+        sed -i 's/^Stats = .*/Stats = no/' "$cfg"
+    fi
+    touch "$stamp"
+}
+
 patch_flycast_hd_cfg() {
     local cfg="$1"
     [ -f "$cfg" ] || { log "skip flycast (no cfg; preset missing from ${PRESETS_DIR})"; return 0; }
@@ -118,7 +136,8 @@ patch_flycast_hd_cfg() {
     if grep -q '^Dreamcast\.ContentPath = ' "$cfg"; then
         sed -i "s|^Dreamcast\\.ContentPath = .*|Dreamcast.ContentPath = ${path}|" "$cfg"
     fi
-    log "flycast cfg: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, vsync on, content paths set"
+    ensure_flycast_stats_default "$cfg"
+    log "flycast cfg: ${HD_WIDTH}x${HD_HEIGHT} fullscreen, vsync on, content paths set, network stats off by default"
 }
 
 detect_display_resolution
