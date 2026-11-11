@@ -201,8 +201,47 @@ flycast_cfg_path() {
     echo "${FC_DATA}/config/flycast/emu.cfg"
 }
 
+# Lobby-style modes (e.g. 641x480) keep 4:3 + full stretch. Native game timings like
+# Midway 400x254 use reduced DAR (200:127) and arcade resolution instead of 4:3 stretch.
+fightcade_mode_near_43() {
+    local w="$1" h="$2" lhs rhs diff limit
+    [ -n "$w" ] && [ -n "$h" ] && [ "$h" -gt 0 ] || return 1
+    lhs=$((w * 3))
+    rhs=$((h * 4))
+    diff=$((lhs > rhs ? lhs - rhs : rhs - lhs))
+    # ~4% of 4:3 reference height (h*4), plus a couple pixels slack for odd lobby sizes (641x480).
+    limit=$((h * 4 / 25 + 4))
+    [ "$diff" -le "$limit" ] && return 0
+    return 1
+}
+
+# Midway T-Unit / Wolf-style 400x254: FBNeo with lobby-style stretch still clips
+# the bottom on CRT. Shorter fullscreen height (matches ES RetroArch viewport 238).
+fightcade_midway_tunit_mode() {
+    [ "${1:-}" = "400" ] && [ "${2:-}" = "254" ]
+}
+
+MIDWAY_FBNEO_VIEWPORT_H=238
+
+fightcade_ini_aspect_xy() {
+    local w="$1" h="$2" a b t g
+    w="$1"
+    h="$2"
+    a="$w"
+    b="$h"
+    while [ "$b" -ne 0 ]; do
+        t=$((a % b))
+        a="$b"
+        b="$t"
+    done
+    g="$a"
+    [ "$g" -gt 0 ] || g=1
+    printf '%s %s\n' "$((w / g))" "$((h / g))"
+}
+
 patch_wine_ini() {
     local ini="$1" w="$2" h="$3"
+    local ax ay
     [ -n "$ini" ] || return 0
     [ -f "$ini" ] || return 0
     [ -f "${ini}.bak.switchres" ] || cp "$ini" "${ini}.bak.switchres"
@@ -212,14 +251,37 @@ patch_wine_ini() {
     sed -i "s/^nVidVerHeight .*/nVidVerHeight $h/" "$ini"
     sed -i "s/^bVidAutoSwitchFull .*/bVidAutoSwitchFull 1/" "$ini"
     sed -i "s/^bVidDX9WinFullscreen .*/bVidDX9WinFullscreen 1/" "$ini"
-    sed -i "s/^bVidArcaderesHor .*/bVidArcaderesHor 0/" "$ini"
-    sed -i "s/^bVidArcaderesVer .*/bVidArcaderesVer 0/" "$ini"
-    sed -i "s/^nVidScrnAspectX .*/nVidScrnAspectX 4/" "$ini"
-    sed -i "s/^nVidScrnAspectY .*/nVidScrnAspectY 3/" "$ini"
-    sed -i "s/^nVidVerScrnAspectX .*/nVidVerScrnAspectX 4/" "$ini"
-    sed -i "s/^nVidVerScrnAspectY .*/nVidVerScrnAspectY 3/" "$ini"
-    sed -i "s/^bVidCorrectAspect .*/bVidCorrectAspect 0/" "$ini"
-    sed -i "s/^bVidFullStretch .*/bVidFullStretch 1/" "$ini"
+    if fightcade_mode_near_43 "$w" "$h"; then
+        sed -i "s/^bVidArcaderesHor .*/bVidArcaderesHor 0/" "$ini"
+        sed -i "s/^bVidArcaderesVer .*/bVidArcaderesVer 0/" "$ini"
+        sed -i "s/^nVidScrnAspectX .*/nVidScrnAspectX 4/" "$ini"
+        sed -i "s/^nVidScrnAspectY .*/nVidScrnAspectY 3/" "$ini"
+        sed -i "s/^nVidVerScrnAspectX .*/nVidVerScrnAspectX 4/" "$ini"
+        sed -i "s/^nVidVerScrnAspectY .*/nVidVerScrnAspectY 3/" "$ini"
+        sed -i "s/^bVidCorrectAspect .*/bVidCorrectAspect 0/" "$ini"
+        sed -i "s/^bVidFullStretch .*/bVidFullStretch 1/" "$ini"
+    else
+        read -r ax ay <<< "$(fightcade_ini_aspect_xy "$w" "$h")"
+        # Same fullscreen stretch as lobby (correct=0, stretch=1), but monitor
+        # aspect is the game DAR (e.g. Midway 200:127). correct=1 letterboxes and
+        # looked cropped on 400x254 CRT modes.
+        sed -i "s/^bVidArcaderesHor .*/bVidArcaderesHor 0/" "$ini"
+        sed -i "s/^bVidArcaderesVer .*/bVidArcaderesVer 0/" "$ini"
+        sed -i "s/^nVidScrnAspectX .*/nVidScrnAspectX $ax/" "$ini"
+        sed -i "s/^nVidScrnAspectY .*/nVidScrnAspectY $ay/" "$ini"
+        sed -i "s/^nVidVerScrnAspectX .*/nVidVerScrnAspectX $ax/" "$ini"
+        sed -i "s/^nVidVerScrnAspectY .*/nVidVerScrnAspectY $ay/" "$ini"
+        sed -i "s/^bVidCorrectAspect .*/bVidCorrectAspect 0/" "$ini"
+        sed -i "s/^bVidFullStretch .*/bVidFullStretch 1/" "$ini"
+        sed -i 's/^fVidScreenAngle .*/fVidScreenAngle 0.000000/' "$ini"
+        sed -i 's/^fVidScreenCurvature .*/fVidScreenCurvature 0.000000/' "$ini"
+        dbg "patch_wine_ini: native aspect ${ax}:${ay} lobby stretch for ${w}x${h}"
+    fi
+    if fightcade_midway_tunit_mode "$w" "$h"; then
+        sed -i "s/^nVidHorHeight .*/nVidHorHeight ${MIDWAY_FBNEO_VIEWPORT_H}/" "$ini"
+        sed -i "s/^nVidVerHeight .*/nVidVerHeight ${MIDWAY_FBNEO_VIEWPORT_H}/" "$ini"
+        dbg "patch_wine_ini: Midway viewport h=${MIDWAY_FBNEO_VIEWPORT_H} (switchres ${w}x${h})"
+    fi
     sed -i "s/^bMonitorAutoCheck .*/bMonitorAutoCheck 0/" "$ini"
     sed -i "s/^nWindowPosX .*/nWindowPosX 0/" "$ini"
     sed -i "s/^nWindowPosY .*/nWindowPosY 0/" "$ini"
