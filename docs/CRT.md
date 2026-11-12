@@ -36,6 +36,7 @@ resolution and refresh rate, then restores menu timing when the session ends.
 ## Contents
 
 - [Fightcade resolution](#fightcade-resolution)
+- [Midway / 400×254 FBNeo on CRT](#midway--400254-fbneo-on-crt)
 - [Controls (CRT)](#controls-crt)
 - [Settings persistence](#settings-persistence)
 - [Keyboard (FBNeo / SNES)](#keyboard-fbneo--snes)
@@ -53,6 +54,31 @@ above).
 Fightcade's Video Mode must resolve to **640×480** on CRT (set it directly, or leave
 **Advanced Game Settings → Video Mode = Auto** if your global **System Settings → Video
 Mode** is already 640×480). See the note at the [top of this page](#crt--switchres-support).
+
+## Midway / 400×254 FBNeo on CRT
+
+Some **FBNeo** games (notably **Midway T-Unit** titles such as *Mortal Kombat 2/3*,
+*NBA Jam*, *WWF WrestleMania*) use Switchres at native **400×254**. Stock Fightcade
+patching treated every game mode like **4:3** fullscreen stretch, which clipped the
+bottom of the picture (for example the **PRESS START** line on MK3).
+
+The CRT wrapper applies a **shorter FBNeo fullscreen height (238 lines)** while
+Switchres stays at **400×254**, with native display aspect (**200∶127**) and the same
+fullscreen stretch behaviour as the lobby. That keeps the bottom UI visible on CRT
+hardware where this was tested.
+
+> [!NOTE]
+> **Slight vertical squeeze:** This is a software workaround, not a cab **V-size**
+> adjustment. Wine FBNeo does not expose the same per-title vertical geometry controls
+> you would use on an arcade chassis, and the Flatpak path does not give users a safe
+> “vertical service menu” for these sessions. On **400×254** Midway-style games you may
+> notice **text near the bottom looks a little smaller or denser** than at the top of
+> the screen. Tuning `MIDWAY_FBNEO_VIEWPORT_H` in `crt/fightcade-crt-switchres`
+> trades that squeeze against bottom clipping; **238** is the value used after hardware
+> testing (values closer to **254** reduce squeeze but tend to clip again).
+
+Any game whose Switchres timing resolves to **exactly 400×254** gets this path, not only
+Mortal Kombat. Lobby and ~4:3 menu timing (for example **641×480**) is unchanged.
 
 ## Controls (CRT)
 
