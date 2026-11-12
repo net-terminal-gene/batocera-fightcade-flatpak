@@ -216,7 +216,8 @@ fightcade_mode_near_43() {
 }
 
 # Midway T-Unit / Wolf-style 400x254: FBNeo with lobby-style stretch still clips
-# the bottom on CRT. Shorter fullscreen height (matches ES RetroArch viewport 238).
+# the bottom on CRT. Shorter fullscreen height (238; see docs/CRT.md). Slight vertical
+# squeeze vs a real cab V-size pot is expected; we have no user-facing vertical adjust.
 fightcade_midway_tunit_mode() {
     [ "${1:-}" = "400" ] && [ "${2:-}" = "254" ]
 }
